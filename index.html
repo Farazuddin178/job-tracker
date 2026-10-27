@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Job Search Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="lock" class="lock">
+    <form id="lock-form" class="lock-card" autocomplete="off">
+      <h1>Job Search Tracker</h1>
+      <p class="muted">This page is encrypted. Enter the passphrase to open it.</p>
+      <label for="pass" class="sr-only">Passphrase</label>
+      <input id="pass" type="password" placeholder="Passphrase" required autofocus>
+      <label class="check"><input id="remember" type="checkbox"> Remember on this device</label>
+      <button type="submit">Unlock</button>
+      <p id="lock-error" class="error" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="app" hidden>
+    <header class="top">
+      <div>
+        <h1>Job Search Tracker</h1>
+        <p class="muted" id="built"></p>
+      </div>
+      <button id="lock-btn" class="ghost">Lock</button>
+    </header>
+
+    <section class="kpis" id="kpis" aria-label="Summary"></section>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="today" aria-selected="true">Today</button>
+      <button role="tab" data-tab="followups">Follow-ups</button>
+      <button role="tab" data-tab="tracker">Tracker</button>
+      <button role="tab" data-tab="evals">Evaluations</button>
+      <button role="tab" data-tab="history">History</button>
+    </nav>
+
+    <section id="tab-today" class="panel"></section>
+    <section id="tab-followups" class="panel" hidden></section>
+    <section id="tab-tracker" class="panel" hidden>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search company, role, notes">
+        <div id="status-filter" class="chips"></div>
+      </div>
+      <div id="tracker-list"></div>
+    </section>
+    <section id="tab-evals" class="panel" hidden></section>
+    <section id="tab-history" class="panel" hidden></section>
+  </div>
+
+  <script src="data.enc.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
