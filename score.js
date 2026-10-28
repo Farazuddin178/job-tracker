@@ -29,7 +29,7 @@
     [/\b(senior|sr\.?|lead|manager|principal|head|director|vp|avp|vice president|architect)\b/, 'senior title'],
     [/\b(sales|business development|telecaller|tele ?sales|voice process|bpo|data entry|inside sales)\b/, 'sales / BPO / data entry'],
     [/\b(intern|internship|apprentice)\b/, 'internship'],
-    [/\b(accountant|accounts payable|accounts receivable|reconciliation|treasury|fp&a|tax|payroll|credit analyst|loan)\b/, 'finance-ops'],
+    [/\b(accountant|accounts payable|accounts receivable|reconciliation|treasury|fp&a|tax|payroll|credit analyst|loan|grants?)\b/, 'finance-ops'],
   ];
   const JUNIOR = [/\b(associate|junior|jr\.?|trainee|graduate|entry[- ]level|fresher|new grad)\b/, /\b(analyst|engineer|developer|specialist)\s+(i|1)\b/, /\b(l1|level 1|tier 1)\b/];
   const MID = [/\b(ii|2|l2|level 2)\b/];
