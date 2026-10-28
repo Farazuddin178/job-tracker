@@ -3,3 +3,4 @@ node_modules/
 *.png
 .pdf-salt
 .pdf-cache.json
+.cloud-input-hash

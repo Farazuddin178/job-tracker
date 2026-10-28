@@ -4,43 +4,77 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Job Search Tracker</title>
+  <meta name="theme-color" content="#0e100c">
+  <title>Job Hunt</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <canvas id="fx" aria-hidden="true"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+
   <main id="lock" class="lock">
-    <form id="lock-form" class="lock-card" autocomplete="off">
-      <h1>Job Search Tracker</h1>
-      <p class="muted">This page is encrypted. Enter the passphrase to open it.</p>
-      <label for="pass" class="sr-only">Passphrase</label>
-      <input id="pass" type="password" placeholder="Passphrase" required autofocus>
-      <label class="check"><input id="remember" type="checkbox"> Remember on this device</label>
-      <button type="submit">Unlock</button>
-      <p id="lock-error" class="error" role="alert"></p>
-    </form>
+    <div class="lock-inner">
+      <p class="eyebrow"><span class="dot"></span> Private · encrypted end to end</p>
+      <h1 class="display">JOB<br>HUNT</h1>
+      <p class="kicker">T h e &nbsp; n e x t &nbsp; r o l e</p>
+      <p class="serif">Every rejection<br>teaches the search.</p>
+      <form id="lock-form" class="lock-form" autocomplete="off">
+        <label for="pass" class="sr-only">Passphrase</label>
+        <input id="pass" type="password" placeholder="Passphrase" required autofocus>
+        <label class="check"><input id="remember" type="checkbox"> Remember on this device</label>
+        <button type="submit" class="btn primary">Unlock <span aria-hidden="true">↘</span></button>
+        <p id="lock-error" class="error" role="alert"></p>
+      </form>
+    </div>
+    <div class="sun" aria-hidden="true"></div>
+    <p class="coords" aria-hidden="true">17°23′N &nbsp;78°29′E<br>Hyderabad / IN</p>
   </main>
 
   <div id="app" hidden>
-    <header class="top">
-      <div>
-        <h1>Job Search Tracker</h1>
-        <p class="muted" id="built"></p>
+    <header class="bar">
+      <a class="brand" href="#" data-tab="today">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 2 22 12 12 22 2 12Z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7 17 12 12 17 7 12Z" fill="currentColor"/></svg>
+        <span><b>JOB HUNT</b><small>Mohammed Faraz Uddin</small></span>
+      </a>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button role="tab" data-tab="today" aria-selected="true"><i>01</i>Today</button>
+        <button role="tab" data-tab="feed"><i>02</i>New jobs <span class="count" id="feed-count"></span></button>
+        <button role="tab" data-tab="apply"><i>03</i>To apply <span class="count" id="apply-count"></span></button>
+        <button role="tab" data-tab="followups"><i>04</i>Follow-ups</button>
+        <button role="tab" data-tab="tracker"><i>05</i>Tracker</button>
+        <button role="tab" data-tab="evals"><i>06</i>Evaluations</button>
+        <button role="tab" data-tab="history"><i>07</i>History</button>
+      </nav>
+      <div class="bar-end">
+        <button id="connect-btn" class="btn ghost small" type="button">Connect</button>
+        <button id="lock-btn" class="btn ghost small" type="button">Lock</button>
       </div>
-      <button id="lock-btn" class="ghost">Lock</button>
+      <div class="progress" aria-hidden="true"><span id="progress"></span></div>
     </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot"></span> <span id="built"></span></p>
+        <h1 class="display" id="hero-title">THE<br> NEXT ROLE</h1>
+        <p class="serif" id="hero-line">Apply where you can win.</p>
+        <div class="pull">
+          <button id="pull-btn" class="btn primary" type="button">Pull new jobs <span aria-hidden="true">↘</span></button>
+          <p id="pull-status" class="mono muted" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div class="hero-side" aria-hidden="true">
+        <div class="sun"></div>
+        <p class="vertical">求職 · Hyderabad · 17°23′N 78°29′E</p>
+      </div>
+    </section>
 
     <section class="kpis" id="kpis" aria-label="Summary"></section>
 
-    <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="today" aria-selected="true">Today</button>
-      <button role="tab" data-tab="apply">To apply</button>
-      <button role="tab" data-tab="followups">Follow-ups</button>
-      <button role="tab" data-tab="tracker">Tracker</button>
-      <button role="tab" data-tab="evals">Evaluations</button>
-      <button role="tab" data-tab="history">History</button>
-    </nav>
-
     <section id="tab-today" class="panel"></section>
+    <section id="tab-feed" class="panel" hidden></section>
     <section id="tab-apply" class="panel" hidden></section>
     <section id="tab-followups" class="panel" hidden></section>
     <section id="tab-tracker" class="panel" hidden>
@@ -52,9 +86,40 @@
     </section>
     <section id="tab-evals" class="panel" hidden></section>
     <section id="tab-history" class="panel" hidden></section>
+
+    <footer class="foot mono">
+      <span>Encrypted · AES-256-GCM</span><span>career-ops</span><span>Never auto-applies</span>
+    </footer>
   </div>
 
+  <dialog id="connect" class="dialog">
+    <form method="dialog" class="dialog-body" id="connect-form">
+      <p class="eyebrow"><span class="dot"></span> One-time setup</p>
+      <h2 class="display small">CONNECT THE PULL BUTTON</h2>
+      <p>The button starts a job on GitHub that scans your 38 company boards and adds new matches here. It needs two things, once:</p>
+      <ol class="steps">
+        <li><b>A secret on the repo.</b> In <a href="https://github.com/Farazuddin178/job-tracker/settings/secrets/actions/new" target="_blank" rel="noopener noreferrer">Settings → Secrets → Actions</a>, add <code>TRACKER_PASSPHRASE</code> with this page's passphrase as the value.</li>
+        <li><b>A token for this device.</b> <a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create a fine-grained token</a>: repository access <i>Only select repositories → job-tracker</i>; permissions <i>Actions: Read and write</i> and <i>Contents: Read-only</i>. Paste it below.</li>
+      </ol>
+      <label for="token" class="sr-only">GitHub token</label>
+      <input id="token" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+      <p class="muted small-print">The token stays in this browser only and can do nothing outside job-tracker. Remove it any time with Disconnect.</p>
+      <p id="connect-msg" class="mono" role="status"></p>
+      <div class="actions">
+        <button class="btn primary" id="token-save" type="button">Save and test</button>
+        <button class="btn ghost" id="token-clear" type="button">Disconnect</button>
+        <button class="btn ghost" value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
   <script src="data.enc.js"></script>
+  <script src="feed.enc.js" onerror="window.JOB_FEED=null"></script>
+  <script src="score.js"></script>
   <script src="app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" defer></script>
+  <script src="fx.js" defer></script>
 </body>
 </html>

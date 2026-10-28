@@ -1,0 +1,74 @@
+name: Pull jobs
+
+# Started by the page's "Pull new jobs" button (workflow_dispatch) and every morning at 07:00 IST.
+# Everything it reads and writes is encrypted with the TRACKER_PASSPHRASE secret; the log prints counts only.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "pull = scan for new jobs; feedback = only save rejections"
+        type: choice
+        options: [pull, feedback]
+        default: pull
+      feedback:
+        description: "Encrypted feedback from the page (leave empty)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "30 1 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pull-jobs
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MODE: ${{ inputs.mode || 'pull' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the career-ops version to run
+        id: ref
+        if: env.MODE == 'pull'
+        run: echo "sha=$(tr -dc 0-9a-f < cloud/career-ops-ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: env.MODE == 'pull'
+        with:
+          repository: career-ops-hq/career-ops
+          ref: ${{ steps.ref.outputs.sha }}
+          path: .career-ops
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the scanner
+        if: env.MODE == 'pull'
+        working-directory: .career-ops
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error
+
+      - name: Pull jobs
+        env:
+          TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
+          CAREER_OPS_DIR: ${{ github.workspace }}/.career-ops
+          FEEDBACK: ${{ inputs.feedback }}
+        run: node cloud/pull.mjs
+
+      - name: Save the feed
+        run: |
+          git config user.name "job-tracker bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feed.enc.js
+          if git diff --cached --quiet; then echo "No change."; exit 0; fi
+          git commit -q -m "Pull jobs ($MODE) $(date -u +%F)"
+          for i in 1 2 3; do git pull -q --rebase && git push -q && exit 0; sleep 5; done
+          exit 1

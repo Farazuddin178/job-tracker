@@ -12,6 +12,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, pbkdf2Sync, createCipheriv, createHash, createHmac } from 'node:crypto';
+import { encryptJson, feedScript } from './cloud/crypto.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const opsDir = resolve(process.env.CAREER_OPS_DIR || join(here, '..', 'career-ops'));
@@ -152,9 +153,48 @@ function encryptPdfs(roles, pass) {
   return { salt: salt.toString('base64'), written, total: keep.size };
 }
 
+// Input for the cloud "Pull new jobs" job (cloud/pull.mjs): the scanner's config and what counts as
+// already seen, encrypted. Rewritten only when the content changes, so it doesn't churn git history.
+function cloudInput(pass) {
+  const files = {};
+  for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md']) {
+    const p = join(root, rel);
+    if (existsSync(p)) files[rel] = readFileSync(p, 'utf8');
+  }
+  files['data/applications.md'] = readFileSync(resolveTrackerPath(root), 'utf8');
+  const hist = join(root, 'data', 'scan-history.tsv');
+  if (existsSync(hist)) {
+    // skipped_* rows never count as seen (the scanner re-filters them every run), so leave them out.
+    files['data/scan-history.tsv'] = readFileSync(hist, 'utf8').split('\n')
+      .filter(l => l && (l.startsWith('url\t') || !/^skipped_/.test(l.split('\t')[5] || ''))).join('\n') + '\n';
+  }
+  const dir = join(here, 'cloud');
+  mkdirSync(dir, { recursive: true });
+  // The scanner version: the newest upstream career-ops commit this checkout contains (public repo).
+  const ref = spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: opsDir, encoding: 'utf8' }).stdout.trim();
+  if (/^[0-9a-f]{40}$/.test(ref)) writeFileSync(join(dir, 'career-ops-ref'), ref + '\n');
+  const hash = createHash('sha256').update(pass).update(JSON.stringify(files)).digest('hex');
+  const hashFile = join(here, '.cloud-input-hash');
+  const out = join(dir, 'input.enc.json');
+  if (existsSync(out) && existsSync(hashFile) && readFileSync(hashFile, 'utf8').trim() === hash) return false;
+  writeFileSync(out, JSON.stringify({ ...encryptJson(pass, { builtAt: new Date().toISOString(), files }) }) + '\n');
+  writeFileSync(hashFile, hash);
+  return true;
+}
+
+// feed.enc.js belongs to the cloud job; create an empty one only if it has never run.
+function ensureFeed(pass) {
+  const f = join(here, 'feed.enc.js');
+  if (existsSync(f)) return;
+  const state = { v: 1, jobs: [], feedback: [], seen: [], runs: [], updatedAt: new Date().toISOString() };
+  writeFileSync(f, feedScript({ ...encryptJson(pass, state), updatedAt: state.updatedAt }));
+}
+
 const trackerRows = tracker();
 const applyList = toApply(trackerRows);
 const pdfInfo = encryptPdfs(applyList, passphrase());
+const cloudChanged = cloudInput(passphrase());
+ensureFeed(passphrase());
 const payload = {
   builtAt: new Date().toISOString(),
   tracker: trackerRows,
@@ -171,4 +211,4 @@ const cipher = createCipheriv('aes-256-gcm', key, iv);
 const data = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final(), cipher.getAuthTag()]);
 const enc = { v: 1, iterations: ITERATIONS, salt: salt.toString('base64'), iv: iv.toString('base64'), data: data.toString('base64'), builtAt: payload.builtAt };
 writeFileSync(join(here, 'data.enc.js'), `window.JOB_DATA = ${JSON.stringify(enc)};\n`);
-console.log(`Built data.enc.js — ${payload.tracker.length} tracker rows, ${payload.followups.entries.length} follow-ups due, ${payload.reports.length} reports, ${payload.dailies.length} daily runs, ${applyList.length} roles to apply (${pdfInfo.total} CV PDFs, ${pdfInfo.written} re-encrypted).`);
+console.log(`Built data.enc.js — ${payload.tracker.length} tracker rows, ${payload.followups.entries.length} follow-ups due, ${payload.reports.length} reports, ${payload.dailies.length} daily runs, ${applyList.length} roles to apply (${pdfInfo.total} CV PDFs, ${pdfInfo.written} re-encrypted), cloud input ${cloudChanged ? 'updated' : 'unchanged'}.`);
