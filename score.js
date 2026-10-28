@@ -87,9 +87,24 @@
     if (/hyderabad|telangana/.test(loc)) hire += 0.25;
     else if (/remote/.test(loc) && /india|^remote$/.test(loc)) why.push('remote in India');
     let adj = 0, hiddenBy = null;
+    // The job description, when the cloud job could read it (see analyzeJd).
+    const jd = job.jd;
+    if (jd) {
+      if (jd.hide) hiddenBy = jd.hide;
+      if (jd.years != null) {
+        if (jd.years <= 1) { hire = Math.max(hire, 4.5); why.push(`asks ${jd.years}–1 yrs`); }
+        else if (jd.years === 2) { hire = Math.min(hire, 3); why.push('asks 2 yrs'); }
+      }
+      if (jd.certs?.length) { hire -= 0.5; why.push(`wants ${jd.certs.join(', ')}`); }
+      if (jd.calls) why.push('includes phone calls');
+      const m = jd.matched?.length || 0;
+      if (m >= 6) { fit += 0.5; why.push(`${m} of your skills in the JD`); }
+      else if (m >= 3) { fit += 0.25; why.push(`${m} of your skills in the JD`); }
+      else if (m <= 1) { fit -= 0.5; why.push('few of your skills in the JD'); }
+    }
     if (learned) {
       const c = normCompany(job.company);
-      if (learned.companies[c]) hiddenBy = `you rejected ${learned.companies[c]} as a company`;
+      if (!hiddenBy && learned.companies[c]) hiddenBy = `you rejected ${learned.companies[c]} as a company`;
       const city = cityOf(job.location);
       if (!hiddenBy && city && learned.places[city]) hiddenBy = `you rejected jobs in ${learned.places[city]}`;
       const ts = tokens(job.title);
@@ -107,6 +122,44 @@
     return { hidden: !!hiddenBy, hiddenBy, archetype: a?.id || '—', fit: r(fit), hire: r(hire), rank: Math.round(fit * hire * 10) / 10, why };
   }
 
+  // Read a job description for the hard filters and the score: years asked, listed pay,
+  // languages you don't speak, voice/BPO work, required certifications, and which of your skills it names.
+  const SKILLS = ['python', 'sql', 'postgresql', 'mysql', 'javascript', 'typescript', 'rest api', 'flask', 'react', 'node.js', 'git',
+    'pytorch', 'machine learning', 'splunk', 'wireshark', 'nmap', 'linux', 'windows server', 'investigat', 'fraud', 'escalat', 'sop',
+    'sla', 'kyc', 'aml', 'risk', 'compliance', 'data analysis', 'web scraping', 'trust and safety', 'trust & safety', 'payments',
+    'anomal', 'automation', '24x7', 'rotational shift', 'hindi', 'urdu', 'telugu', 'cyber', 'security', 'ai coding', 'generative ai'];
+  const OTHER_LANGS = 'german|french|spanish|japanese|mandarin|chinese|korean|arabic|portuguese|italian|dutch|russian|tamil|kannada|malayalam|marathi|bengali|gujarati|polish|turkish|thai|vietnamese|indonesian|hebrew|swedish|danish|norwegian|finnish';
+  function analyzeJd(text) {
+    const t = lc(text).replace(/\s+/g, ' ');
+    if (t.length < 200) return null;
+    const out = { years: null, payLpa: null, certs: [], matched: [], hide: null };
+    if (/\b(fresher|freshers|no prior experience|0 ?- ?1 years?|entry[- ]level)\b/.test(t)) out.years = 0;
+    const ys = [];
+    for (const m of t.matchAll(/(\d{1,2})(?:\.\d)?\s*\+?\s*(?:-|–|to)?\s*(?:\d{1,2})?\s*\+?\s*(?:years?|yrs?)(?:'|’)?\s*(?:of\s+)?(?:[a-z/&,-]+\s+){0,5}?(?:experience|exp\b)/g)) {
+      const n = Number(m[1]); if (n <= 15) ys.push(n);
+    }
+    if (ys.length) out.years = Math.min(...ys);
+    // Pay: "₹4,00,000", "4-6 LPA", "INR 5 lakh", "₹30,000 per month".
+    const pays = [];
+    for (const m of t.matchAll(/(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:lpa|lakhs?|l\.?p\.?a)/g)) pays.push(Number(m[2]));
+    for (const m of t.matchAll(/(\d+(?:\.\d+)?)\s*(?:lpa|lakhs? per annum|lakhs?)/g)) pays.push(Number(m[1]));
+    for (const m of t.matchAll(/(?:₹|inr|rs\.?)\s?(\d{1,3}(?:,\d{2,3})+|\d{4,7})(?:\s*(?:-|–|to)\s*(?:₹|inr|rs\.?)?\s?(\d{1,3}(?:,\d{2,3})+|\d{4,7}))?\s*(per month|\/ ?month|monthly|pm\b)?/g)) {
+      const hi = Number((m[2] || m[1]).replace(/,/g, ''));
+      pays.push(m[3] ? hi * 12 / 1e5 : hi / 1e5);
+    }
+    const real = pays.filter(p => p >= 0.5 && p <= 100);
+    if (real.length) out.payLpa = Math.max(...real);
+    if (out.years != null && out.years >= 3) out.hide = `asks ${out.years}+ years of experience`;
+    else if (out.payLpa != null && out.payLpa < 4) out.hide = `listed pay tops out at ₹${out.payLpa.toFixed(1)} LPA, under your ₹4 LPA floor`;
+    else if (new RegExp(`(fluen|proficien|native|business[- ]level|written and (verbal|spoken))[^.]{0,50}\\b(${OTHER_LANGS})\\b|\\b(${OTHER_LANGS})\\b[^.]{0,25}(speaker|fluency|is (a )?must|required|mandatory)`).test(t)) out.hide = 'needs a language you don\'t speak';
+    else if (/\b(voice process|cold call(ing)?|telecall(ing|er)?|tele ?sales|call cent(er|re)|bpo)\b/.test(t)) out.hide = 'voice / call-centre work';
+    else if (/\b(b\.? ?com|commerce graduate|chartered accountant|mba[- ]finance)\b[^.]{0,40}\b(required|must|mandatory)\b/.test(t)) out.hide = 'needs a commerce / finance degree';
+    out.certs = ['cams', 'cfe', 'cissp', 'ceh', 'security+', 'cisa', 'cism', 'oscp'].filter(c => new RegExp(`\\b${escRe(c)}(?![a-z])`).test(t) && new RegExp(`(required|must have|mandatory)[^.]{0,60}\\b${escRe(c)}|\\b${escRe(c)}[^.]{0,40}(required|mandatory)`).test(t)).map(c => c.toUpperCase());
+    out.matched = SKILLS.filter(s => wordRe(s).test(t));
+    out.calls = /(inbound|outbound) calls?|phone calls?/.test(t);
+    return out;
+  }
+
   // Feedback as it stands: the latest choice per job, minus anything undone.
   function active(list) {
     const undone = new Set((list || []).filter(f => f.action === 'undo').map(f => f.target));
@@ -121,5 +174,5 @@
     ['dup', 'Already applied / duplicate'], ['other', 'Other'],
   ];
 
-  root.JobScore = { learn, score, tokens, active, REASONS, ARCH };
+  root.JobScore = { learn, score, tokens, active, analyzeJd, REASONS, ARCH };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,12 +1,13 @@
 name: Pull jobs
 
 # Started by the page's "Pull new jobs" button (workflow_dispatch) and every morning at 07:00 IST.
+# A pull scans the boards, reads each new job description, scores it and builds a tailored CV.
 # Everything it reads and writes is encrypted with the TRACKER_PASSPHRASE secret; the log prints counts only.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "pull = scan for new jobs; feedback = only save rejections"
+        description: "pull = scan for new jobs and build CVs; feedback = only save rejections"
         type: choice
         options: [pull, feedback]
         default: pull
@@ -27,11 +28,15 @@ concurrency:
 jobs:
   pull:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       MODE: ${{ inputs.mode || 'pull' }}
     steps:
+      # Always the newest main, not the commit the run was queued on: a run queued behind
+      # another must start from the feed that run saved.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Read the career-ops version to run
         id: ref
@@ -49,26 +54,40 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install the scanner
+      - name: Install the scanner and the PDF renderer
         if: env.MODE == 'pull'
         working-directory: .career-ops
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error
+        run: |
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error
+          npx playwright install --with-deps chromium > /dev/null
 
       - name: Pull jobs
         env:
           TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
           CAREER_OPS_DIR: ${{ github.workspace }}/.career-ops
           FEEDBACK: ${{ inputs.feedback }}
+          DELTA_FILE: ${{ runner.temp }}/delta.json
         run: node cloud/pull.mjs
 
       - name: Save the feed
+        env:
+          TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
+          DELTA_FILE: ${{ runner.temp }}/delta.json
         run: |
           git config user.name "job-tracker bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add feed.enc.js
-          if git diff --cached --quiet; then echo "No change."; exit 0; fi
-          git commit -q -m "Pull jobs ($MODE) $(date -u +%F)"
-          for i in 1 2 3; do git pull -q --rebase && git push -q && exit 0; sleep 5; done
+          for i in 1 2 3 4 5; do
+            git add feed.enc.js cvs
+            if git diff --cached --quiet; then echo "No change."; exit 0; fi
+            git commit -q -m "Pull jobs ($MODE) $(date -u +%F)"
+            if git push -q origin HEAD:main; then exit 0; fi
+            echo "Someone saved first; replaying this run on the newer feed (attempt $i)."
+            git fetch -q origin main
+            git reset -q --mixed origin/main
+            git checkout -q origin/main -- feed.enc.js
+            node cloud/pull.mjs --apply-delta "$DELTA_FILE"
+            sleep 3
+          done
           exit 1

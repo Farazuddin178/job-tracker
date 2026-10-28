@@ -157,7 +157,9 @@ function encryptPdfs(roles, pass) {
 // already seen, encrypted. Rewritten only when the content changes, so it doesn't churn git history.
 function cloudInput(pass) {
   const files = {};
-  for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md']) {
+  // Scanner config and seen lists, plus what the cloud CV builder needs: cv.md (the fact gate's
+  // ground truth), the CV kit (variants built from cv.md) and the PDF salt (below).
+  for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md', 'cv.md', 'article-digest.md', 'data/cv-kit.json']) {
     const p = join(root, rel);
     if (existsSync(p)) files[rel] = readFileSync(p, 'utf8');
   }
@@ -173,11 +175,12 @@ function cloudInput(pass) {
   // The scanner version: the newest upstream career-ops commit this checkout contains (public repo).
   const ref = spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: opsDir, encoding: 'utf8' }).stdout.trim();
   if (/^[0-9a-f]{40}$/.test(ref)) writeFileSync(join(dir, 'career-ops-ref'), ref + '\n');
-  const hash = createHash('sha256').update(pass).update(JSON.stringify(files)).digest('hex');
+  const pdfSalt = readFileSync(join(here, '.pdf-salt'), 'utf8').trim();
+  const hash = createHash('sha256').update(pass).update(pdfSalt).update(JSON.stringify(files)).digest('hex');
   const hashFile = join(here, '.cloud-input-hash');
   const out = join(dir, 'input.enc.json');
   if (existsSync(out) && existsSync(hashFile) && readFileSync(hashFile, 'utf8').trim() === hash) return false;
-  writeFileSync(out, JSON.stringify({ ...encryptJson(pass, { builtAt: new Date().toISOString(), files }) }) + '\n');
+  writeFileSync(out, JSON.stringify({ ...encryptJson(pass, { builtAt: new Date().toISOString(), files, pdfSalt }) }) + '\n');
   writeFileSync(hashFile, hash);
   return true;
 }

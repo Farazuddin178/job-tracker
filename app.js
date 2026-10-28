@@ -90,11 +90,22 @@
     });
     return pdfScripts[id];
   }
-  async function downloadPdf(id, name, btn) {
+  // CVs built by the cloud job live in cvs/{id}.json. Pages may not have redeployed yet, so fall back to the API.
+  async function loadCloudCv(id) {
+    try {
+      const r = await fetch(`cvs/${id}.json?v=${Date.now()}`, { cache: 'no-store' });
+      if (r.ok) return await r.json();
+    } catch { /* fall through */ }
+    if (!token()) throw new Error('CV not on the site yet');
+    const r = await gh(`/contents/cvs/${id}.json?ref=main`, { headers: { Accept: 'application/vnd.github.raw+json' } });
+    if (!r.ok) throw new Error('CV not found');
+    return r.json();
+  }
+  async function downloadPdf(id, name, btn, kind = 'pdfs') {
     const label = btn.innerHTML;
     btn.disabled = true; btn.textContent = 'Preparing…';
     try {
-      const [enc, key] = await Promise.all([loadPdfScript(id), keyFor(PASS, DATA.pdfSalt, window.JOB_DATA.iterations)]);
+      const [enc, key] = await Promise.all([kind === 'cvs' ? loadCloudCv(id) : loadPdfScript(id), keyFor(PASS, DATA.pdfSalt, window.JOB_DATA.iterations)]);
       const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(enc.iv) }, key, fromB64(enc.data));
       const url = URL.createObjectURL(new Blob([plain], { type: 'application/pdf' }));
       const a = Object.assign(document.createElement('a'), { href: url, download: name });
@@ -152,7 +163,7 @@
     }
     await refreshFeed();
     const last = (FEED.runs || []).slice(-1)[0];
-    if (mark.mode === 'pull') toast(last ? `Pull finished · ${last.found} new job${last.found === 1 ? '' : 's'}` : 'Pull finished');
+    if (mark.mode === 'pull') toast(last ? `Pull finished · ${last.found} new job${last.found === 1 ? '' : 's'} · ${last.cvs || 0} CV${last.cvs === 1 ? '' : 's'} ready` : 'Pull finished');
     if (QUEUE.length) scheduleSync(3000);
   }
   async function refreshFeed() {
@@ -194,7 +205,7 @@
     const last = (FEED.runs || []).filter(r => r.mode === 'pull').slice(-1)[0];
     const queued = QUEUE.length ? ` · ${QUEUE.length} choice${QUEUE.length === 1 ? '' : 's'} on this device${token() ? ', syncing' : ', not sent yet'}` : '';
     if (mark && mark.mode === 'pull') {
-      setPull(`<span class="spinner"></span>Scanning your company boards · started ${ago(new Date(mark.at).toISOString())}. Usually 10–15 minutes; you can close this page.${mark.url ? ` <a href="${esc(mark.url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}`);
+      setPull(`<span class="spinner"></span>Scanning boards, reading job descriptions and building a CV for each new job · started ${ago(new Date(mark.at).toISOString())}. Usually 15–30 minutes; you can close this page.${mark.url ? ` <a href="${esc(mark.url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}`);
     } else if (!token()) {
       setPull(`Connect once and this button scans your 38 boards in the cloud.${queued}`);
     } else {
@@ -245,15 +256,29 @@
         ${c?.action === 'reject' ? `<span class="badge rejected">Rejected${c.reasons?.length ? ` · ${esc(c.reasons.join(', '))}` : ''}</span>` : ''}
       </div>
       <p class="why">${esc(j.s.hiddenBy && !c ? `Hidden: ${j.s.hiddenBy}` : j.s.why.join(' · '))}</p>
-      <p class="meta">${[j.posted && `posted ${j.posted}`, `found ${j.found}`, 'pay: not listed'].filter(Boolean).map(esc).join(' · ')}</p>
+      ${jdRow(j)}
+      <p class="meta">${[j.posted && `posted ${j.posted}`, `found ${j.found}`, j.cv && `CV: ${j.cv.variant.replace(/_/g, ' ')} version${j.cv.ats ? ` · ATS ${j.cv.ats}` : ''}`].filter(Boolean).map(esc).join(' · ')}</p>
       <div class="actions">
-        ${isUrl(j.url) ? `<a class="btn ghost small" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
+        ${isUrl(j.url) ? `<a class="btn ${j.cv ? 'primary' : 'ghost'} small" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
+        ${j.cv ? `<button class="btn ghost small" type="button" data-pdf="${esc(j.cv.id)}" data-kind="cvs" data-name="${esc(j.cv.name)}">Download CV ↓</button>`
+          : `<span class="muted mono">${esc(j.cvSkip ? 'No CV: filtered out' : j.cvError ? `CV failed (${j.cvError}); retried next pull` : 'CV comes with the next pull')}</span>`}
         ${c ? `<button class="btn ghost small" type="button" data-undo-url="${esc(j.url)}">Undo</button>`
             : `<button class="btn ghost small" type="button" data-like="${i}">★ Interested</button>
                <button class="btn ghost small" type="button" data-open-reject="${key}">Not for me ✕</button>`}
       </div>
       ${rejectForm(key)}
     </article>`;
+  }
+  // What the job description said (the cloud job reads it through the ATS API).
+  function jdRow(j) {
+    if (j.jd === undefined) return '';
+    if (!j.jd) return '<div class="row"><span class="badge">JD not readable · score from title</span></div>';
+    const d = j.jd;
+    return `<div class="row">
+      <span class="badge${d.years != null && d.years >= 3 ? ' urgent' : ''}">${d.years == null ? 'years: not stated' : `asks ${d.years}+ yrs`}</span>
+      <span class="badge${d.payLpa != null ? ' pay' : ''}">${d.payLpa == null ? 'pay: not listed' : `pay up to ₹${esc(d.payLpa.toFixed(1))} LPA`}</span>
+      <span class="badge" title="${esc((d.matched || []).join(', '))}">${(d.matched || []).length} of your skills</span>
+    </div>`;
   }
   function learnedPanel() {
     const L = LEARNED;
@@ -278,7 +303,7 @@
     let html = head('02', 'New jobs', open.length, 'Fresh from your company boards. Reject what you don\'t want and say why: the list learns, and so does the daily run.');
     html += learnedPanel();
     if (liked.length) html += head('02.1', 'Interested', liked.length, 'The next daily run evaluates these first and builds a tailored CV.') + cards(liked);
-    html += open.length ? head('02.2', 'To review', open.length, 'Ranked by quick fit × hireability, from the title only. Pay is checked in the full evaluation.') + cards(open)
+    html += open.length ? head('02.2', 'To review', open.length, 'Ranked by fit × hireability, read from each job description (from the title when the description could not be read). Each comes with a tailored one-page CV.') + cards(open)
       : `<p class="empty">${FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the 07:00 auto-pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
     if (hidden.length) html += `<details class="fold"><summary>Hidden by what you taught me (${hidden.length})</summary>${cards(hidden)}</details>`;
     if (rejected.length) html += `<details class="fold"><summary>Rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
@@ -498,7 +523,7 @@
     const copy = e.target.closest('[data-copy]');
     if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => { copy.textContent = 'Copied'; }).catch(() => {}); return; }
     const pdf = e.target.closest('[data-pdf]');
-    if (pdf) { downloadPdf(pdf.dataset.pdf, pdf.dataset.name, pdf); return; }
+    if (pdf) { downloadPdf(pdf.dataset.pdf, pdf.dataset.name, pdf, pdf.dataset.kind || 'pdfs'); return; }
     const like = e.target.closest('[data-like]');
     if (like) {
       const j = FEED_JOBS[Number(like.dataset.like)];
