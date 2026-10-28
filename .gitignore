@@ -1,3 +1,5 @@
 .passphrase
 node_modules/
 *.png
+.pdf-salt
+.pdf-cache.json

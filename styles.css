@@ -112,6 +112,21 @@ tr:last-child td { border-bottom: 0; }
 .fu.done { opacity: .5; }
 .fu.done h3 { text-decoration: line-through; }
 .answer { display: flex; gap: .6rem; align-items: flex-start; justify-content: space-between; }
+
+/* To apply */
+.apply-head { display: flex; flex-wrap: wrap; gap: .2rem .6rem; align-items: baseline; }
+.apply-head h3 { margin: 0; }
+.apply .row { margin-top: .35rem; }
+.apply p.muted { margin-top: .4rem; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center; margin-top: .7rem; }
+.btn {
+  display: inline-block; background: var(--accent); color: var(--accent-text); border-radius: 8px;
+  padding: .55rem 1rem; font-weight: 600; text-decoration: none;
+}
+.badge.hire { color: var(--ok); }
+.badge.urgent { color: var(--bad); border-color: var(--bad); }
+.card.apply.done { opacity: .55; }
+button:disabled { opacity: .6; cursor: progress; }
 .empty { color: var(--muted); padding: 1rem 0; }
 
 @media (max-width: 640px) {

@@ -29,12 +29,50 @@
   const badge = status => `<span class="badge ${esc(String(status).toLowerCase())}">${esc(status)}</span>`;
 
   let DATA = null;
+  let PASS = null;
+
+  // CV PDFs: pdfs/{id}.js holds AES-GCM ciphertext; the key comes from the passphrase + DATA.pdfSalt.
+  let pdfKey = null;
+  const pdfScripts = {};
+  function pdfKeyFor() {
+    if (!pdfKey) pdfKey = crypto.subtle.importKey('raw', new TextEncoder().encode(PASS), 'PBKDF2', false, ['deriveKey'])
+      .then(base => crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(DATA.pdfSalt), iterations: window.JOB_DATA.iterations, hash: 'SHA-256' },
+        base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']));
+    return pdfKey;
+  }
+  function loadPdfScript(id) {
+    if (!pdfScripts[id]) pdfScripts[id] = new Promise((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = `pdfs/${id}.js`;
+      s.onload = () => (window.JOB_PDF && window.JOB_PDF[id] ? ok(window.JOB_PDF[id]) : fail(new Error('PDF missing')));
+      s.onerror = () => { delete pdfScripts[id]; fail(new Error('Could not load the PDF.')); };
+      document.head.appendChild(s);
+    });
+    return pdfScripts[id];
+  }
+  async function downloadPdf(id, name, btn) {
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing…';
+    try {
+      const [enc, key] = await Promise.all([loadPdfScript(id), pdfKeyFor()]);
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(enc.iv) }, key, b64(enc.data));
+      const url = URL.createObjectURL(new Blob([plain], { type: 'application/pdf' }));
+      const a = Object.assign(document.createElement('a'), { href: url, download: name });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      btn.textContent = label;
+    } catch (err) {
+      btn.textContent = 'Download failed — retry';
+    } finally { btn.disabled = false; }
+  }
 
   function renderKpis() {
     const count = s => DATA.tracker.filter(r => r.status === s).length;
     const waiting = DATA.tracker.filter(r => r.status === 'Applied' && /waiting/i.test(r.notes)).length;
     const due = DATA.followups.entries.length;
+    const toApply = (DATA.toApply || []).filter(r => store.get(appliedKey(r)) !== '1').length;
     const tiles = [
+      ['To apply', toApply, 'with CV ready'],
       ['Applied', count('Applied'), `${waiting} waiting`],
       ['Interview', count('Interview') + count('Assessment'), 'active'],
       ['Offers', count('Offer') + count('Hired'), ''],
@@ -77,6 +115,53 @@
     }
     html += dailyHtml(run);
     $('tab-today').innerHTML = html;
+  }
+
+  // To apply: every confirmed role with a tailored CV, best chance of an interview first.
+  const appliedKey = r => `jt-applied-${r.pdfId || r.url}`;
+  const GROUPS = [
+    ['Best chances', 'Hireability 3.5 or more: apply first.', r => r.hire >= 3.5],
+    ['Good shot', 'Hireability 3: worth a tailored application.', r => r.hire >= 3 && r.hire < 3.5],
+    ['Stretch', 'Hireability 2–2.5: you miss a stated requirement; apply if the role excites you.', r => r.hire >= 2 && r.hire < 3],
+    ['Long shot', 'Hireability 1.5 or less: the posting asks for more years than you have. Low odds.', r => r.hire < 2],
+  ];
+  function closingSoon(r) {
+    if (!r.closes) return false;
+    const days = (new Date(r.closes) - new Date(new Date().toISOString().slice(0, 10))) / 86_400_000;
+    return days <= 2;
+  }
+  function applyCard(r) {
+    const done = store.get(appliedKey(r)) === '1';
+    const meta = [`posted ${r.posted}`, `experience asked: ${r.years}`, r.archetype].filter(Boolean).map(esc).join(' · ');
+    return `<div class="card apply${done ? ' done' : ''}">
+      <div class="apply-head"><h3>${esc(r.title)}</h3><span class="muted">${esc(r.company)}</span></div>
+      <div class="row">
+        <span class="badge hire" title="Hireability: your realistic chance of an interview">Hire ${esc(r.hire)}/5</span>
+        <span class="badge" title="How well the role matches your profile">Fit ${esc(r.fit)}/5</span>
+        ${r.decision ? badge(r.decision) : ''}
+        ${r.closes ? `<span class="badge${closingSoon(r) ? ' urgent' : ''}">closes ${esc(r.closes)}</span>` : ''}
+        <span class="muted">${meta}</span>
+      </div>
+      ${r.note ? `<p class="muted">${esc(r.note)}</p>` : ''}
+      <div class="actions">
+        ${/^https?:\/\//.test(r.url) ? `<a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
+        ${r.pdfId ? `<button class="ghost" data-pdf="${esc(r.pdfId)}" data-name="${esc(r.pdf)}">Download CV (PDF)</button>` : '<span class="muted">CV not built yet</span>'}
+        <label class="check"><input type="checkbox" data-applied="${esc(appliedKey(r))}" ${done ? 'checked' : ''}> I applied</label>
+      </div>
+    </div>`;
+  }
+  function renderToApply() {
+    const list = [...(DATA.toApply || [])].sort((a, b) => b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
+    if (!list.length) { $('tab-apply').innerHTML = '<p class="empty">Nothing to apply to yet. Run "daily" in career-ops, then publish.</p>'; return; }
+    const open = list.filter(r => store.get(appliedKey(r)) !== '1');
+    const marked = list.filter(r => store.get(appliedKey(r)) === '1');
+    let html = `<p class="muted">Sorted by hireability (your chance of getting an interview), then fit. Each CV is tailored to that posting and fits one A4 page. Read the CV before you send it.</p>`;
+    for (const [name, hint, test] of GROUPS) {
+      const rows = open.filter(test);
+      if (rows.length) html += `<h2>${esc(name)} <span class="muted">(${rows.length})</span></h2><p class="muted">${esc(hint)}</p>${rows.map(applyCard).join('')}`;
+    }
+    if (marked.length) html += `<h2>Marked applied on this device <span class="muted">(${marked.length})</span></h2><p class="muted">They leave this list for good once career-ops sees the confirmation email and updates the tracker.</p>${marked.map(applyCard).join('')}`;
+    $('tab-apply').innerHTML = html;
   }
 
   function evalCard(r) {
@@ -130,12 +215,13 @@
       `<button data-run="${i}" aria-pressed="${i === 0}">${esc(d.date)}</button>`).join('')}</div><div id="run-body">${dailyHtml(DATA.dailies[0])}</div>`;
   }
 
-  function show(data) {
+  function show(data, pass) {
     DATA = data;
+    PASS = pass;
     $('lock').hidden = true;
     $('app').hidden = false;
     $('built').textContent = `Updated ${new Date(data.builtAt).toLocaleString()}`;
-    renderKpis(); renderToday(); renderFollowups(); renderTracker(); renderEvals(); renderHistory();
+    renderKpis(); renderToday(); renderToApply(); renderFollowups(); renderTracker(); renderEvals(); renderHistory();
   }
 
   // Events
@@ -146,7 +232,7 @@
     try {
       const data = await decrypt(pass);
       if ($('remember').checked) store.set(PASS_KEY, pass);
-      show(data);
+      show(data, pass);
     } catch (err) {
       $('lock-error').textContent = err.message.includes('data.enc.js') ? err.message : 'Wrong passphrase.';
     }
@@ -169,8 +255,16 @@
     }
     const copy = e.target.closest('[data-copy]');
     if (copy) navigator.clipboard?.writeText(copy.dataset.copy).then(() => { copy.textContent = 'Copied'; }).catch(() => {});
+    const pdf = e.target.closest('[data-pdf]');
+    if (pdf) downloadPdf(pdf.dataset.pdf, pdf.dataset.name, pdf);
   });
   document.addEventListener('change', e => {
+    const applied = e.target.dataset?.applied;
+    if (applied) {
+      if (e.target.checked) store.set(applied, '1'); else store.del(applied);
+      renderToApply(); renderKpis();
+      return;
+    }
     const key = e.target.dataset?.key;
     if (!key) return;
     if (e.target.checked) store.set(key, '1'); else store.del(key);
@@ -179,5 +273,5 @@
 
   // Auto-unlock when the passphrase was remembered on this device.
   const saved = store.get(PASS_KEY);
-  if (saved) decrypt(saved).then(show).catch(() => store.del(PASS_KEY));
+  if (saved) decrypt(saved).then(data => show(data, saved)).catch(() => store.del(PASS_KEY));
 })();

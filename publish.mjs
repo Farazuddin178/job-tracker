@@ -18,6 +18,7 @@ const run = (cmd, args, opts = {}) => {
 
 run(process.execPath, ['build.mjs'], { stdio: 'inherit' });
 run('git', ['add', 'index.html', 'styles.css', 'app.js', 'build.mjs', 'publish.mjs', 'README.md', '.gitignore', 'data.enc.js']);
+run('git', ['add', '-A', 'pdfs']); // encrypted CVs, including removed ones
 const changed = run('git', ['diff', '--cached', '--quiet'], { allowFail: true }).status !== 0;
 if (changed) run('git', ['commit', '-m', `Update tracker ${new Date().toISOString().slice(0, 10)}`]);
 else console.log('Nothing changed since the last publish.');
