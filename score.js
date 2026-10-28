@@ -92,7 +92,7 @@
     if (jd) {
       if (jd.hide) hiddenBy = jd.hide;
       if (jd.years != null) {
-        if (jd.years <= 1) { hire = Math.max(hire, 4.5); why.push(`asks ${jd.years}–1 yrs`); }
+        if (jd.years <= 1) { hire = Math.max(hire, 4.5); why.push(`asks ${jd.years} yr${jd.years === 1 ? "" : "s"}`); }
         else if (jd.years === 2) { hire = Math.min(hire, 3); why.push('asks 2 yrs'); }
       }
       if (jd.certs?.length) { hire -= 0.5; why.push(`wants ${jd.certs.join(', ')}`); }

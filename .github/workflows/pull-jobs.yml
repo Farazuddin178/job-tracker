@@ -60,7 +60,7 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
-          npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error
+          npm install --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error  # upstream does not commit a lockfile
           npx playwright install --with-deps chromium > /dev/null
 
       - name: Pull jobs
