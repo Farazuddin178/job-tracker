@@ -90,5 +90,5 @@ const out = {
 };
 if (!dry) writeFileSync(outFile, JSON.stringify(out, null, 2) + '\n');
 const count = s => jobs.filter(j => j.status === s).length;
-console.log(`Synced: ${jobs.length} feed jobs (${count('new')} new, ${count('interested')} interested, ${count('rejected')} rejected, ${count('hidden')} hidden by learned rules), ${feedback.length} feedback items.`);
+console.log(`Synced: ${jobs.length} feed jobs (${count('new')} new, ${count('interested')} interested, ${count('rejected')} rejected, ${count('hidden')} hidden by filters or learned rules), ${feedback.length} feedback items.`);
 for (const l of log) console.log(`  ${l}`);

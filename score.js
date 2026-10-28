@@ -51,7 +51,7 @@
       const reasons = f.reasons || [];
       if (f.action === 'like') {
         likes++;
-        for (const t of tokens(f.title)) tok[t] = (tok[t] || 0) + 1.5;
+        for (const t of tokens(f.title)) if (!GENERIC.has(t)) tok[t] = (tok[t] || 0) + 1.5;
         if (f.archetype) arch[f.archetype] = (arch[f.archetype] || 0) + 1.5;
         continue;
       }
@@ -59,9 +59,11 @@
       rejects++;
       if (reasons.includes('company')) companies[normCompany(f.company)] = f.company;
       if (reasons.includes('location') && f.location) places[cityOf(f.location)] = f.location;
-      // The title itself was the problem for these reasons; company/location/pay/duplicate say nothing about the work.
-      if (!reasons.length || reasons.some(r => ['field', 'senior', 'type', 'other'].includes(r))) {
-        for (const t of tokens(f.title)) tok[t] = (tok[t] || 0) - 1;
+      // The title itself was the problem for these reasons; company/location/pay/duplicate say nothing about
+      // the work, and a rejection with no reason (e.g. "their site errored") teaches nothing about titles.
+      // Words found in almost every target title (analyst, associate…) never count.
+      if (reasons.some(r => ['field', 'senior', 'type', 'other'].includes(r))) {
+        for (const t of tokens(f.title)) if (!GENERIC.has(t)) tok[t] = (tok[t] || 0) - 1;
         if (f.archetype && reasons.includes('field')) arch[f.archetype] = (arch[f.archetype] || 0) - 1;
       }
     }
