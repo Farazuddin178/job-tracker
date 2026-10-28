@@ -20,6 +20,13 @@ Roles come from `../career-ops/data/to-apply.json`; a role leaves the list once 
 
 The **Pull new jobs** button starts `.github/workflows/pull-jobs.yml` (also runs daily at 07:00 IST). The workflow checks out the public career-ops scanner at the version in `cloud/career-ops-ref`. It decrypts `cloud/input.enc.json` (portals, profile, tracker, pipeline, blacklist and seen scan history, written by `build.mjs`) and runs `scan.mjs` against it, with zero AI tokens. It then adds new jobs to `feed.enc.js`. Everything stays encrypted, and the public log prints counts only.
 
+For every new job, the pull also does three things:
+- **Reads the job description** through the ATS API (`fetch-jd.mjs`).
+- **Scores it** with `score.js` `analyzeJd`: years asked, listed pay, required languages and certifications, and which of your skills it names. The hard filters apply: 3+ years, pay under ₹4 LPA, a language you don't speak, voice/BPO work.
+- **Builds a tailored one-page CV** with `cloud/cv.mjs`. It starts from the encrypted CV kit (`data/cv-kit.json`, built only from `cv.md` facts) and runs the career-ops gates: title check, structure, fact gate against `cv.md`, A4 `--strict-pages` PDF, ATS check.
+
+The PDF is encrypted into `cvs/{id}.json` and downloads from the job's card. At most 30 CVs are built per run; the rest follow on the next pull.
+
 On the page, **Not for me** asks for a reason, and **Interested** marks a pick. Choices queue on the device and reach the workflow encrypted, as a `feedback` run. `score.js` turns them into rules shared by the page and `sync.mjs`:
 - A rejected company or place is hidden.
 - A title word rejected 3+ times more than it was liked hides matching jobs. Common words like "analyst" only re-rank.
