@@ -45,6 +45,9 @@ function applyDelta(state, d) {
   for (const l of d.seen || []) if (!seen.has(l.split('\t')[0])) { state.seen.push(l); seen.add(l.split('\t')[0]); }
   if (d.run) state.runs = [...state.runs, d.run];
   if (d.lastPullAt) state.lastPullAt = d.lastPullAt;
+  // Liveness verdicts per posting URL: {status: active|expired|uncertain, reason, at}.
+  state.liveness = { ...(state.liveness || {}), ...(d.liveness || {}) };
+  if (d.lastCheckAt) state.lastCheckAt = d.lastCheckAt;
   const cutoff = new Date(Date.now() - KEEP_DAYS * 86_400_000).toISOString().slice(0, 10);
   state.jobs = state.jobs.filter(j => j.found >= cutoff).slice(-MAX_JOBS);
   state.seen = state.seen.slice(-5000);
@@ -76,7 +79,7 @@ if (process.env.FEEDBACK && process.env.FEEDBACK.trim()) {
     if (!raw || typeof raw.id !== 'string' || known.has(raw.id)) continue;
     delta.feedback.push({
       id: raw.id.slice(0, 40), at: String(raw.at || new Date().toISOString()).slice(0, 30),
-      action: ['reject', 'like', 'undo'].includes(raw.action) ? raw.action : 'reject',
+      action: ['reject', 'like', 'undo', 'closed', 'open'].includes(raw.action) ? raw.action : 'reject',
       target: raw.target ? String(raw.target).slice(0, 40) : undefined,
       url: String(raw.url || '').slice(0, 600), company: String(raw.company || '').slice(0, 120),
       title: String(raw.title || '').slice(0, 200), location: String(raw.location || '').slice(0, 120),
@@ -184,6 +187,37 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       }
       if (Object.keys(u).length) delta.updates[job.url] = u;
     }
+
+    // 4. Is each posting still open? Every job that can reach To apply: pulled jobs you haven't
+    // rejected or marked closed, plus the evaluated roles from career-ops. check-liveness.mjs asks the
+    // job board's API first and loads the page only when it must; "expired" needs clear evidence
+    // (404/410, "no longer accepting applications"), anything unreadable stays "uncertain".
+    // A pull rechecks what wasn't confirmed in the last 20 hours; "check" (the page's button) rechecks all.
+    if (mode === 'pull' || mode === 'check') {
+      const closedByYou = new Set(fbNow.filter(f => f.action === 'closed').map(f => f.url));
+      const localApply = input.files['data/to-apply.json'] ? JSON.parse(input.files['data/to-apply.json']).map(r => r.url) : [];
+      const fresh = url => { const l = state.liveness?.[url]; return l && l.status === 'active' && Date.now() - new Date(l.at) < 20 * 3600_000; };
+      const urls = [...new Set([...state.jobs, ...delta.jobs].map(j => j.url).concat(localApply))]
+        .filter(u => /^https?:\/\//.test(u) && !rejected.has(u) && !closedByYou.has(u) && state.liveness?.[u]?.status !== 'expired')
+        .filter(u => mode === 'check' || !fresh(u) && !delta.jobs.some(j => j.url === u));
+      if (urls.length) {
+        const file = join(root, 'liveness-urls.txt');
+        writeFileSync(file, urls.join('\n'));
+        const r = spawnSync(process.execPath, ['check-liveness.mjs', '--no-fallback', '--no-record', '--file', file], { cwd: opsDir, env, encoding: 'utf8', timeout: 30 * 60_000, maxBuffer: 32 << 20 });
+        const lines = (r.stdout || '').split('\n');
+        delta.liveness = {};
+        for (let i = 0; i < lines.length; i++) {
+          const m = lines[i].match(/^\S+\s+(active|expired|uncertain)\s+(?:\(api\)\s+)?(?:.*\s)?(https?:\/\/\S+)\s*$/);
+          if (!m || !urls.includes(m[2])) continue;
+          const reason = m[1] !== 'active' && /^\s{6,}\S/.test(lines[i + 1] || '') ? lines[i + 1].trim().slice(0, 160) : '';
+          delta.liveness[m[2]] = { status: m[1], reason, at: new Date().toISOString() };
+        }
+        const v = Object.values(delta.liveness);
+        Object.assign(run, { checked: v.length, expired: v.filter(x => x.status === 'expired').length, uncertain: v.filter(x => x.status === 'uncertain').length });
+        delta.expiredUrls = Object.entries(delta.liveness).filter(([, x]) => x.status === 'expired').map(([u]) => u);
+      }
+      delta.lastCheckAt = new Date().toISOString();
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 } else if (mode === 'pull') throw new Error('CAREER_OPS_DIR must point at a career-ops checkout.');
 
@@ -191,4 +225,4 @@ delta.run = run;
 save(applyDelta(state, delta));
 if (process.env.DELTA_FILE) writeFileSync(process.env.DELTA_FILE, JSON.stringify(encryptJson(pass, delta)));
 // Counts only: Actions logs of a public repo are public, so never print company names or titles.
-console.log(`mode=${mode} new jobs=${run.found} job descriptions read=${run.jds} CVs built=${run.cvs} CV failures=${run.cvFailed} filtered=${run.hidden} feedback added=${run.feedback} source errors=${run.errors.length}`);
+console.log(`mode=${mode} checked=${run.checked || 0} closed=${run.expired || 0} unconfirmed=${run.uncertain || 0} new jobs=${run.found} job descriptions read=${run.jds} CVs built=${run.cvs} CV failures=${run.cvFailed} filtered=${run.hidden} feedback added=${run.feedback} source errors=${run.errors.length}`);

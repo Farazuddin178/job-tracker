@@ -32,18 +32,25 @@ const fresh = state.jobs.filter(j => newUrls.has(j.url)).map(scored);
 const ready = fresh.filter(j => !j.s.hidden && !rejected.has(j.url)).sort((a, b) => b.s.rank - a.s.rank);
 const filtered = fresh.filter(j => j.s.hidden);
 const builtFor = Object.entries(delta.updates || {}).filter(([, u]) => u.cv).map(([url]) => url);
-const toApply = state.jobs.map(scored).filter(j => !rejected.has(j.url) && (j.cv || fb.some(f => f.url === j.url && f.action === 'like')) && (!j.s.hidden || fb.some(f => f.url === j.url && f.action === 'like'))).length;
+const live = state.liveness || {};
+const gone = u => live[u]?.status === 'expired' || fb.some(f => f.url === u && f.action === 'closed');
+const toApply = state.jobs.map(scored).filter(j => !rejected.has(j.url) && !gone(j.url) && (j.cv || fb.some(f => f.url === j.url && f.action === 'like')) && (!j.s.hidden || fb.some(f => f.url === j.url && f.action === 'like'))).length;
+// Postings this run found closed (pulled jobs and evaluated roles alike).
+const input0 = existsSync(join(here, 'cloud/input.enc.json')) ? decryptJson(pass, JSON.parse(readFileSync(join(here, 'cloud/input.enc.json'), 'utf8'))) : { files: {} };
+const evaluated = input0.files['data/to-apply.json'] ? JSON.parse(input0.files['data/to-apply.json']) : [];
+const closedNow = (delta.expiredUrls || []).map(u => state.jobs.find(j => j.url === u) || evaluated.find(r => r.url === u) || { url: u, title: u, company: '' });
 
 // Morning run: always send a digest. Other runs: only when something new arrived.
 const istHour = new Date(Date.now() + 5.5 * 3600_000).getUTCHours();
 const scheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
 const morning = scheduled && istHour < 12;
-const worth = ready.length > 0 || (run.mode === 'feedback' && builtFor.length > 0) || morning || (run.mode === 'pull' && !scheduled);
+const worth = ready.length > 0 || closedNow.length > 0 || (run.mode === 'feedback' && builtFor.length > 0) || morning || (['pull', 'check'].includes(run.mode) && !scheduled);
 if (!worth) { console.log('Nothing new: no notification.'); process.exit(0); }
 
 const date = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
 const subject = ready.length
   ? `${ready.length} new job${ready.length === 1 ? '' : 's'} with tailored CVs · ${date}`
+  : run.mode === 'check' ? `Posting check: ${closedNow.length} closed and removed, ${run.checked || 0} checked · ${date}`
   : run.mode === 'feedback' ? `CV ready for the job${builtFor.length === 1 ? '' : 's'} you marked interested · ${date}`
   : `No new jobs this time · ${toApply} in your To apply list · ${date}`;
 
@@ -60,6 +67,8 @@ function emailHtml() {
   h += `<p style="font:600 18px Arial">${esc(subject)}</p>`;
   if (ready.length) h += `<table style="width:100%;border-collapse:collapse">${ready.map(row).join('')}</table>`;
   if (run.mode === 'feedback' && builtFor.length) h += `<p>Your CV is ready for: ${builtFor.map(u => esc(state.jobs.find(j => j.url === u)?.title || u)).join(', ')}. It is on your To apply page.</p>`;
+  if (closedNow.length) h += `<p><b>${closedNow.length} posting${closedNow.length === 1 ? ' has' : 's have'} closed</b> and left your To apply page: ${closedNow.map(j => esc(`${j.company ? `${j.company}: ` : ''}${j.title}`)).join('; ')}.</p>`;
+  if (run.uncertain) h += `<p style="color:#555">${run.uncertain} posting${run.uncertain === 1 ? '' : 's'} could not be confirmed open (page unreadable); they stay listed with a warning.</p>`;
   if (filtered.length) h += `<p style="color:#555">${filtered.length} more were filtered out by your rules (e.g. ${esc(filtered.slice(0, 3).map(j => `${j.company}: ${j.s.hiddenBy}`).join('; '))}).</p>`;
   h += `<p>${toApply} role${toApply === 1 ? '' : 's'} from pulls are on your To apply page. <a href="${SITE}">Open the tracker</a>.</p>`;
   if (run.errors?.length) h += `<p style="color:#555">${run.errors.length} job board${run.errors.length === 1 ? '' : 's'} could not be read this run; they are retried next time.</p>`;
@@ -105,7 +114,7 @@ async function issueComment() {
   let issue = Array.isArray(list) ? list.find(x => x.title === 'Job alerts' && !x.pull_request) : null;
   if (!issue) issue = await (await api('/issues', { method: 'POST', body: JSON.stringify({ title: 'Job alerts', body: `Each pull comments here, so GitHub emails you. Details are only on the tracker: ${SITE}` }) })).json();
   if (issue.state === 'closed') await api(`/issues/${issue.number}`, { method: 'PATCH', body: JSON.stringify({ state: 'open' }) });
-  const body = `**${subject}**\n\n${ready.length ? `${ready.length} new job${ready.length === 1 ? '' : 's'} passed your filters and ${ready.length === 1 ? 'has' : 'have'} a tailored CV.` : 'No new jobs passed your filters.'} ${toApply} role${toApply === 1 ? '' : 's'} from pulls are on your To apply page.\n\nOpen the tracker: ${SITE}`;
+  const body = `**${subject}**\n\n${closedNow.length ? `${closedNow.length} closed posting${closedNow.length === 1 ? '' : 's'} removed from To apply. ` : ''}${ready.length ? `${ready.length} new job${ready.length === 1 ? '' : 's'} passed your filters and ${ready.length === 1 ? 'has' : 'have'} a tailored CV.` : 'No new jobs passed your filters.'} ${toApply} role${toApply === 1 ? '' : 's'} from pulls are on your To apply page.\n\nOpen the tracker: ${SITE}`;
   const r = await api(`/issues/${issue.number}/comments`, { method: 'POST', body: JSON.stringify({ body }) });
   if (!r.ok) throw new Error(`issue comment ${r.status}`);
 }

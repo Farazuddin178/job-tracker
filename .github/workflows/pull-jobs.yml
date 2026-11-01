@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "pull = scan for new jobs and build CVs; feedback = only save rejections"
+        description: "pull = scan for new jobs and build CVs; feedback = save your choices; check = find closed postings"
         type: choice
-        options: [pull, feedback]
+        options: [pull, feedback, check]
         default: pull
       feedback:
         description: "Encrypted feedback from the page (leave empty)"

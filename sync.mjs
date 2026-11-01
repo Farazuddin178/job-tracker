@@ -37,6 +37,12 @@ const feedback = active(state.feedback);
 const learned = learn(feedback);
 const rejected = new Map(feedback.filter(f => f.action === 'reject').map(f => [f.url, f]));
 const liked = new Set(feedback.filter(f => f.action === 'like').map(f => f.url));
+// Closed postings: the cloud liveness check said expired, or you pressed "Posting closed" (unless you
+// later said "It's still open").
+const stillOpen = new Set(feedback.filter(f => f.action === 'open').map(f => f.url));
+const closed = new Map();
+for (const [url, l] of Object.entries(state.liveness || {})) if (l.status === 'expired' && !stillOpen.has(url)) closed.set(url, { url, why: l.reason || 'posting removed', by: 'check' });
+for (const f of feedback.filter(f => f.action === 'closed')) closed.set(f.url, { url: f.url, why: 'marked closed on the tracker site', by: 'you', f });
 
 const outFile = join(root, 'data', 'site-feed.json');
 const prev = existsSync(outFile) ? JSON.parse(readFileSync(outFile, 'utf8')) : {};
@@ -47,11 +53,29 @@ const log = [];
 const applyFile = join(root, 'data', 'to-apply.json');
 if (existsSync(applyFile)) {
   const list = JSON.parse(readFileSync(applyFile, 'utf8'));
-  const keep = list.filter(r => !rejected.has(r.url));
+  const keep = list.filter(r => !rejected.has(r.url) && !closed.has(r.url));
+  for (const r of list) if (closed.has(r.url) && r.report) closed.get(r.url).report = r.report;
   if (keep.length !== list.length) {
-    log.push(`to-apply: removed ${list.length - keep.length} rejected role(s)`);
+    log.push(`to-apply: removed ${list.length - keep.length} rejected or closed role(s)`);
     if (!dry) writeFileSync(applyFile, JSON.stringify(keep, null, 2) + '\n');
   }
+}
+
+// 1b. A closed posting with an evaluation that is still "Evaluated" becomes Discarded, and it is recorded
+// in scan history as skipped_expired so no scan brings it back (career-ops "Offer Verification" rule).
+for (const c of closed.values()) {
+  const key = `closed:${c.url}`;
+  if (applied.has(key)) continue;
+  const report = c.report || c.f?.report;
+  if (report) {
+    const args = ['set-status.mjs', '--report', report, 'Discarded', '--expect-status', 'Evaluated', `--note=posting closed (${c.why})`];
+    if (dry) log.push(`would run: node ${args.join(' ')}`);
+    else {
+      const r = spawnSync(process.execPath, args, { cwd: opsDir, encoding: 'utf8' });
+      log.push(r.status === 0 ? `tracker: report ${report} → Discarded (posting closed)` : `tracker: report ${report} left as is (${(r.stderr || r.stdout).trim().split('\n')[0]})`);
+    }
+  }
+  if (!dry) applied.add(key);
 }
 
 // 2. A rejected role with an evaluation report that is still "Evaluated" becomes Discarded (canonical writer).
@@ -76,11 +100,18 @@ if (fresh.length) {
   log.push(`scan-history: ${fresh.length} cloud-found job(s) recorded as seen`);
   if (!dry) await appendToScanHistory(fresh.map(j => ({ url: j.url, title: j.title, company: j.company, location: j.location, source: 'cloud-pull', postedAt: j.posted || undefined })), new Date().toISOString().slice(0, 10), 'added');
 }
+const expiredRows = new Set(histText.split('\n').filter(l => l.split('\t')[5] === 'skipped_expired').map(l => l.split('\t')[0]));
+const toExpire = [...closed.values()].filter(c => !expiredRows.has(c.url));
+if (toExpire.length) {
+  log.push(`scan-history: ${toExpire.length} closed posting(s) recorded as skipped_expired`);
+  const info = url => state.jobs.find(j => j.url === url) || {};
+  if (!dry) await appendToScanHistory(toExpire.map(c => ({ url: c.url, title: info(c.url).title || c.f?.title || '', company: info(c.url).company || c.f?.company || '', source: 'manual' })), new Date().toISOString().slice(0, 10), 'skipped_expired');
+}
 
 // 4. The daily run reads this file: open feed jobs (scored with what was learned), feedback, learned preferences.
 const jobs = state.jobs.map(j => {
   const s = score(j, learned);
-  return { ...j, status: rejected.has(j.url) ? 'rejected' : liked.has(j.url) ? 'interested' : s.hidden ? 'hidden' : 'new', hiddenBy: s.hiddenBy, quick: { archetype: s.archetype, fit: s.fit, hire: s.hire } };
+  return { ...j, status: rejected.has(j.url) ? 'rejected' : closed.has(j.url) ? 'closed' : liked.has(j.url) ? 'interested' : s.hidden ? 'hidden' : 'new', hiddenBy: s.hiddenBy, quick: { archetype: s.archetype, fit: s.fit, hire: s.hire } };
 });
 const out = {
   syncedAt: new Date().toISOString(), lastPullAt: state.lastPullAt || null,

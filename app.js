@@ -77,6 +77,18 @@
   let ACTIVE = [], LEARNED = S.learn([]);
   function recompute() { ACTIVE = S.active(allFeedback()); LEARNED = S.learn(ACTIVE); }
   const choiceFor = url => ACTIVE.find(f => f.url === url);
+  // Closed postings: the cloud check found it closed, or you marked it closed, unless you said it's still open.
+  const LIVE = () => FEED.liveness || {};
+  const isGone = url => { const c = choiceFor(url); if (c?.action === 'open') return false; return c?.action === 'closed' || LIVE()[url]?.status === 'expired'; };
+  const goneWhy = url => (choiceFor(url)?.action === 'closed' ? 'you marked it closed' : LIVE()[url]?.reason || 'the job board no longer lists it');
+  const userChoice = url => { const c = choiceFor(url); return c && ['like', 'reject'].includes(c.action) ? c : null; };
+  function liveBadge(url) {
+    const l = LIVE()[url];
+    if (!l || choiceFor(url)?.action === 'open') return '';
+    if (l.status === 'uncertain') return `<span class="badge urgent" title="${esc(l.reason)}">couldn't confirm it's open</span>`;
+    if (l.status === 'active') return `<span class="badge" title="Checked on the job board">open · checked ${esc(ago(l.at))}</span>`;
+    return '';
+  }
 
   // ── CV PDFs ─────────────────────────────────────────────────────────
   const pdfScripts = {};
@@ -206,6 +218,8 @@
     const queued = QUEUE.length ? ` · ${QUEUE.length} choice${QUEUE.length === 1 ? '' : 's'} on this device${token() ? ', syncing' : ', not sent yet'}` : '';
     if (mark && mark.mode === 'pull') {
       setPull(`<span class="spinner"></span>Scanning boards, reading job descriptions and building a CV for each new job · started ${ago(new Date(mark.at).toISOString())}. Usually 15–30 minutes; you can close this page.${mark.url ? ` <a href="${esc(mark.url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}`);
+    } else if (mark && mark.mode === 'check') {
+      setPull(`<span class="spinner"></span>Checking every posting on your lists · started ${ago(new Date(mark.at).toISOString())}. Usually 5–10 minutes.`);
     } else if (mark && mark.mode === 'feedback') {
       setPull(`<span class="spinner"></span>Saving your choices and building CVs for your picks · started ${ago(new Date(mark.at).toISOString())}. Usually 3–5 minutes.`);
     } else if (!token()) {
@@ -243,7 +257,7 @@
     const inApply = new Set((DATA.toApply || []).map(r => r.url));
     const tracked = new Set(DATA.tracker.map(r => `${norm(r.company).split(' ')[0]}|${norm(r.role)}`));
     return (FEED.jobs || []).filter(j => !inApply.has(j.url) && !tracked.has(`${norm(j.company).split(' ')[0]}|${norm(j.title)}`))
-      .map(j => ({ ...j, s: S.score(j, LEARNED), choice: choiceFor(j.url) }));
+      .map(j => ({ ...j, s: S.score(j, LEARNED), choice: userChoice(j.url), gone: isGone(j.url) }));
   }
   function feedCard(j, i) {
     const key = `f${i}`, c = j.choice;
@@ -256,6 +270,7 @@
         <span class="badge hire" title="Quick hireability from the title">Hire <b>${j.s.hire}</b></span>
         ${c?.action === 'like' ? '<span class="badge hire">★ Interested</span>' : ''}
         ${c?.action === 'reject' ? `<span class="badge rejected">Rejected${c.reasons?.length ? ` · ${esc(c.reasons.join(', '))}` : ''}</span>` : ''}
+        ${j.gone ? `<span class="badge rejected" title="${esc(goneWhy(j.url))}">Closed</span>` : liveBadge(j.url)}
       </div>
       <p class="why">${esc(j.s.hiddenBy && !c ? `Hidden: ${j.s.hiddenBy}` : j.s.why.join(' · '))}</p>
       ${jdRow(j)}
@@ -264,9 +279,11 @@
         ${isUrl(j.url) ? `<a class="btn ${j.cv ? 'primary' : 'ghost'} small" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
         ${j.cv ? `<button class="btn ghost small" type="button" data-pdf="${esc(j.cv.id)}" data-kind="cvs" data-name="${esc(j.cv.name)}">Download CV ↓</button>`
           : `<span class="muted mono">${esc(j.cvSkip ? 'No CV: filtered out' : j.cvError ? `CV failed (${j.cvError}); retried next pull` : 'CV comes with the next pull')}</span>`}
-        ${c ? `<button class="btn ghost small" type="button" data-undo-url="${esc(j.url)}">Undo</button>`
+        ${j.gone ? `<button class="btn ghost small" type="button" data-reopen-url="${esc(j.url)}">It's still open</button>`
+          : c ? `<button class="btn ghost small" type="button" data-undo-url="${esc(j.url)}">Undo</button>`
             : `<button class="btn ghost small" type="button" data-like="${i}">★ Interested</button>
                <button class="btn ghost small" type="button" data-open-reject="${key}">Not for me ✕</button>`}
+        ${j.gone ? '' : `<button class="btn ghost small" type="button" data-closed="${key}" title="The posting is gone or no longer takes applications">Posting closed</button>`}
       </div>
       ${rejectForm(key)}
     </article>`;
@@ -295,10 +312,11 @@
   }
   function renderFeed() {
     FEED_JOBS = feedJobs();
-    const liked = FEED_JOBS.filter(j => j.choice?.action === 'like');
-    const open = FEED_JOBS.filter(j => !j.choice && !j.s.hidden).sort((a, b) => b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
-    const hidden = FEED_JOBS.filter(j => !j.choice && j.s.hidden);
-    const rejected = FEED_JOBS.filter(j => j.choice?.action === 'reject');
+    const liked = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'like');
+    const open = FEED_JOBS.filter(j => !j.gone && !j.choice && !j.s.hidden).sort((a, b) => b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
+    const hidden = FEED_JOBS.filter(j => !j.gone && !j.choice && j.s.hidden);
+    const rejected = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'reject');
+    const closed = FEED_JOBS.filter(j => j.gone && j.choice?.action !== 'reject');
     const idx = j => FEED_JOBS.indexOf(j);
     const cards = list => `<div class="grid">${list.map(j => feedCard(j, idx(j))).join('')}</div>`;
     $('feed-count').textContent = open.length || '';
@@ -309,6 +327,7 @@
       : `<p class="empty">${FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the 07:00 auto-pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
     if (hidden.length) html += `<details class="fold"><summary>Hidden by what you taught me (${hidden.length})</summary>${cards(hidden)}</details>`;
     if (rejected.length) html += `<details class="fold"><summary>Rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
+    if (closed.length) html += `<details class="fold"><summary>Closed postings (${closed.length})</summary>${cards(closed)}</details>`;
     $('tab-feed').innerHTML = html;
   }
 
@@ -336,6 +355,7 @@
         ${r.pulled && !r.interested ? '<span class="badge">New from pull</span>' : ''}
         ${r.decision ? badge(r.decision) : ''}
         ${r.closes ? `<span class="badge${closingSoon(r) ? ' urgent' : ''}">closes ${esc(r.closes)}</span>` : ''}
+        ${liveBadge(r.url)}
       </div>
       ${r.pay && r.pay !== 'not listed' ? `<div class="row"><span class="badge pay">₹ ${esc(r.pay)}</span></div>` : ''}
       ${r.note ? `<p>${esc(r.note)}</p>` : ''}
@@ -346,9 +366,17 @@
         ${r.pdfId ? `<button class="btn ghost small" type="button" data-pdf="${esc(r.pdfId)}" data-kind="${esc(r.kind || 'pdfs')}" data-name="${esc(r.pdf)}">Download CV ↓</button>` : `<span class="muted mono">${esc(r.cvNote || 'CV not built yet')}</span>`}
         <label class="check"><input type="checkbox" data-applied="${esc(appliedKey(r))}" ${done ? 'checked' : ''}> I applied</label>
         <button class="btn ghost small" type="button" data-open-reject="${key}">Not for me ✕</button>
+        <button class="btn ghost small" type="button" data-closed="${key}" title="The posting is gone or no longer takes applications">Posting closed</button>
       </div>
       ${rejectForm(key)}
     </article>`;
+  }
+  function closedCard(r) {
+    const mine = choiceFor(r.url)?.action === 'closed';
+    return `<article class="card dim"><p class="co"><span>${esc(r.company)}</span><span>closed</span></p><h3>${esc(r.title)}</h3>
+      <p class="why">${esc(goneWhy(r.url))}</p>
+      <div class="actions">${isUrl(r.url) ? `<a class="btn ghost small" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
+      <button class="btn ghost small" type="button" data-reopen-url="${esc(r.url)}">${mine ? 'Undo' : "It's still open"}</button></div></article>`;
   }
   // Every pulled job that passes your filters, plus every job you marked Interested, joins To apply
   // next to the fully evaluated roles. Its score is the pull's quick score from the job description.
@@ -356,7 +384,7 @@
     const local = new Set((DATA.toApply || []).map(r => r.url));
     const tracked = new Set(DATA.tracker.map(r => `${norm(r.company).split(' ')[0]}|${norm(r.role)}`));
     return (FEED.jobs || []).filter(j => !local.has(j.url) && !tracked.has(`${norm(j.company).split(' ')[0]}|${norm(j.title)}`))
-      .map(j => ({ j, s: S.score(j, LEARNED), c: choiceFor(j.url) }))
+      .map(j => ({ j, s: S.score(j, LEARNED), c: userChoice(j.url) }))
       .filter(({ s, c }) => c?.action === 'like' || (!c && !s.hidden))
       .map(({ j, s, c }) => ({
         company: j.company, title: j.title, url: j.url, posted: j.posted, found: j.found, fit: s.fit, hire: s.hire,
@@ -367,7 +395,9 @@
       }));
   }
   function renderToApply() {
-    APPLY = [...(DATA.toApply || []).filter(r => choiceFor(r.url)?.action !== 'reject'), ...pulledForApply()]
+    const all = [...(DATA.toApply || []).filter(r => choiceFor(r.url)?.action !== 'reject'), ...pulledForApply()];
+    const closedRoles = all.filter(r => isGone(r.url));
+    APPLY = all.filter(r => !isGone(r.url))
       .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
     const open = APPLY.filter(r => store.get(appliedKey(r)) !== '1');
     const marked = APPLY.filter(r => store.get(appliedKey(r)) === '1');
@@ -375,6 +405,9 @@
     if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + '<p class="empty">Nothing to apply to yet. The next daily run adds roles with a tailored CV.</p>'; return; }
     const cards = list => `<div class="grid">${list.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`;
     let html = head('03', 'To apply', open.length, 'Evaluated roles plus every pulled job that passes your filters, each with a one-page CV tailored to it. Read the CV before you send it.');
+    const lastCheck = FEED.lastCheckAt;
+    html += `<div class="pull reveal"><button class="btn ghost small" type="button" data-check>Check for closed postings</button>
+      <p class="mono muted">${lastCheck ? `Last checked ${esc(ago(lastCheck))}.` : 'Not checked yet.'} Each pull also rechecks. Closed postings leave this list; found one yourself? Press “Posting closed” on its card.</p></div>`;
     const picks = open.filter(r => r.interested);
     if (picks.length) html += head('03.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
     GROUPS.forEach(([name, hint, test], g) => {
@@ -382,6 +415,7 @@
       if (rows.length) html += head(`03.${g + 1}`, name, rows.length, hint) + cards(rows);
     });
     if (marked.length) html += `<details class="fold"><summary>Marked applied on this device (${marked.length})</summary><p class="muted">They leave for good once career-ops sees the confirmation email.</p>${cards(marked)}</details>`;
+    if (closedRoles.length) html += `<details class="fold"><summary>Closed postings (${closedRoles.length})</summary><p class="muted">Removed because the posting is gone or no longer takes applications. If one is still open, press “It's still open”.</p><div class="grid">${closedRoles.map(closedCard).join('')}</div></details>`;
     $('tab-apply').innerHTML = html;
   }
 
@@ -578,6 +612,31 @@
       return;
     }
     if (e.target.closest('[data-cancel]')) { openReject = null; renderFeed(); renderToApply(); return; }
+    if (e.target.closest('[data-check]')) {
+      if (!token()) { openConnect(); return; }
+      dispatch('check').then(() => toast('Checking every posting · closed ones leave To apply in about 5–10 minutes')).catch(err => setPull(esc(err.message)));
+      return;
+    }
+    const closedBtn = e.target.closest('[data-closed]');
+    if (closedBtn) {
+      const key = closedBtn.dataset.closed;
+      const r = key.startsWith('f') ? FEED_JOBS[Number(key.slice(1))] : APPLY[Number(key.slice(1))];
+      const f = addFeedback({ action: 'closed', source: key.startsWith('f') ? 'feed' : 'apply', url: r.url, company: r.company, title: r.title, location: r.location || '', report: r.report || undefined, reasons: [] });
+      window.__lastReject = f;
+      toast(`Marked closed · ${esc(r.company)} left To apply <button type="button" data-undo-last>Undo</button>`);
+      return;
+    }
+    const reopen = e.target.closest('[data-reopen-url]');
+    if (reopen) {
+      const url = reopen.dataset.reopenUrl, c = choiceFor(url);
+      if (c?.action === 'closed') undo(c);
+      else {
+        const j = (FEED.jobs || []).find(x => x.url === url) || (DATA.toApply || []).find(x => x.url === url) || {};
+        addFeedback({ action: 'open', source: 'apply', url, company: j.company || '', title: j.title || '', reasons: [] });
+      }
+      toast('Back on To apply');
+      return;
+    }
     const confirm = e.target.closest('[data-confirm]');
     if (confirm) {
       const key = confirm.dataset.confirm, note = confirm.closest('.reject').querySelector('.reject-note')?.value.trim() || '';

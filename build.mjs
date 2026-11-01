@@ -159,7 +159,7 @@ function cloudInput(pass) {
   const files = {};
   // Scanner config and seen lists, plus what the cloud CV builder needs: cv.md (the fact gate's
   // ground truth), the CV kit (variants built from cv.md) and the PDF salt (below).
-  for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md', 'cv.md', 'article-digest.md', 'data/cv-kit.json']) {
+  for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md', 'cv.md', 'article-digest.md', 'data/cv-kit.json', 'data/to-apply.json']) {
     const p = join(root, rel);
     if (existsSync(p)) files[rel] = readFileSync(p, 'utf8');
   }
