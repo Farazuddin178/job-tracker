@@ -27,6 +27,8 @@
   // Hard filters (modes/_profile.md): seniority, sales/BPO/voice/data entry, stipend internships.
   const HARD = [
     [/\b(senior|sr\.?|lead|manager|principal|head|director|vp|avp|vice president|architect)\b/, 'senior title'],
+    // Salesforce LMTS/PMTS/SMTS = lead/principal/senior member of technical staff; Wipro bands L4+ are experienced hires.
+    [/\b(lmts|pmts|smts)\b|\bl[4-9]\b/, 'senior level code'],
     [/\b(sales|business development|telecaller|tele ?sales|voice process|bpo|data entry|inside sales)\b/, 'sales / BPO / data entry'],
     [/\b(intern|internship|apprentice)\b/, 'internship'],
     [/\b(accountant|accounts payable|accounts receivable|reconciliation|treasury|fp&a|tax|payroll|credit analyst|loan|grants?)\b/, 'finance-ops'],

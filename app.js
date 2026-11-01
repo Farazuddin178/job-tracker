@@ -175,7 +175,9 @@
     }
     await refreshFeed();
     const last = (FEED.runs || []).slice(-1)[0];
-    if (mark.mode === 'pull') toast(last ? `Pull finished · ${last.found} new job${last.found === 1 ? '' : 's'} · ${last.cvs || 0} CV${last.cvs === 1 ? '' : 's'} ready` : 'Pull finished');
+    if (mark.mode === 'pull') toast(!last ? 'Pull finished'
+      : last.found ? `Pull finished · ${last.found} new job${last.found === 1 ? '' : 's'} · ${last.cvs || 0} CV${last.cvs === 1 ? '' : 's'} ready · see To apply`
+      : `Pull finished · ${last.scanned || 'all'} boards checked, no new matching postings since the last pull${last.expired ? ` · ${last.expired} closed posting${last.expired === 1 ? '' : 's'} removed` : ''}`, 9000);
     if (QUEUE.length) scheduleSync(3000);
   }
   async function refreshFeed() {
