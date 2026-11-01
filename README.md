@@ -27,6 +27,12 @@ For every new job, the pull also does three things:
 
 The PDF is encrypted into `cvs/{id}.json` and downloads from the job's card. At most 30 CVs are built per run; the rest follow on the next pull.
 
+**Closed postings.** Every pull, and the **Check for closed postings** button (workflow mode `check`, about 2 minutes), runs career-ops `check-liveness.mjs` on every job that can reach To apply: pulled jobs and the evaluated roles in `data/to-apply.json`. It asks the board's API first and loads the page only when it must.
+- **Closed:** only on clear evidence (404/410, "posting withdrawn", "no longer available"). The posting moves to a **Closed postings** fold.
+- **Unreadable:** the posting stays listed with a "couldn't confirm it's open" badge.
+- **Posting closed** on a card marks one closed by hand. **It's still open** undoes either kind.
+- **Locally,** `sync.mjs` drops closed roles from `data/to-apply.json`. It sets an evaluated role still at "Evaluated" to Discarded ("posting closed"). It records the URL in scan history as `skipped_expired`, so no scan brings it back.
+
 On the page, **Not for me** asks for a reason, and **Interested** marks a pick. Choices queue on the device and reach the workflow encrypted, as a `feedback` run. `score.js` turns them into rules shared by the page and `sync.mjs`:
 - A rejected company or place is hidden.
 - A title word rejected 3+ times more than it was liked hides matching jobs. Common words like "analyst" only re-rank.
