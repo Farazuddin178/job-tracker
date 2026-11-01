@@ -89,9 +89,10 @@ if (process.env.FEEDBACK && process.env.FEEDBACK.trim()) {
   run.feedback = delta.feedback.length;
 }
 
-if (mode === 'pull') {
-  const opsDir = process.env.CAREER_OPS_DIR;
-  if (!opsDir || !existsSync(join(opsDir, 'scan.mjs'))) throw new Error('CAREER_OPS_DIR must point at a career-ops checkout.');
+// Both modes need the career-ops tools: a pull scans and builds CVs; a feedback run builds the CV
+// for any job just marked "Interested" that doesn't have one yet.
+const opsDir = process.env.CAREER_OPS_DIR;
+if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
   const { parseScanHistoryLine, scanHistoryDataLines } = await import(pathToFileURL(join(opsDir, 'lib/scan-history-columns.mjs')).href);
   const input = decryptJson(pass, JSON.parse(readFileSync(join(here, 'cloud/input.enc.json'), 'utf8')));
   const root = mkdtempSync(join(tmpdir(), 'jobs-'));
@@ -103,6 +104,7 @@ if (mode === 'pull') {
       writeFileSync(join(root, rel), text);
     }
 
+    if (mode === 'pull') {
     // 2. Scan. Seen = what the local run has seen + what earlier cloud pulls added.
     const histFile = join(root, 'data/scan-history.tsv');
     const before = existsSync(histFile) ? readFileSync(histFile, 'utf8') : '';
@@ -110,9 +112,20 @@ if (mode === 'pull') {
     const extra = state.seen.filter(l => !known.has(l.split('\t')[0]));
     writeFileSync(histFile, before.replace(/\n?$/, '\n') + (extra.length ? extra.join('\n') + '\n' : ''));
     for (const l of extra) known.add(l.split('\t')[0]);
-    const r = spawnSync(process.execPath, ['scan.mjs', '--json', '--quiet', '--since', '21'], { cwd: opsDir, env, encoding: 'utf8', timeout: 50 * 60_000, maxBuffer: 64 << 20 });
-    let receipt = null;
-    try { receipt = JSON.parse(r.stdout.trim().split('\n').pop()); } catch { /* no receipt */ }
+    const scan = () => {
+      const res = spawnSync(process.execPath, ['scan.mjs', '--json', '--quiet', '--since', '21'], { cwd: opsDir, env, encoding: 'utf8', timeout: 40 * 60_000, maxBuffer: 64 << 20 });
+      let rec = null;
+      try { rec = JSON.parse(res.stdout.trim().split('\n').pop()); } catch { /* no receipt */ }
+      return [res, rec];
+    };
+    let [r, receipt] = scan();
+    // A network blip can fail most boards at once (31 Oct: 27 of 38). Wait and scan again; the
+    // second pass only adds what the first missed, because scan history already holds the rest.
+    if (!receipt || receipt.errors.length >= Math.max(5, (receipt.scanned || 0) * 0.4)) {
+      run.retried = true;
+      spawnSync(process.execPath, ['-e', 'setTimeout(()=>{}, 45000)']);
+      [r, receipt] = scan();
+    }
     if (receipt) Object.assign(run, { scanned: receipt.scanned, errors: receipt.errors.map(e => `${e.company}: ${e.error}`.slice(0, 160)) });
     if (r.status !== 0 && r.status !== 2) run.errors.push(`scan.mjs exited ${r.status}`);
     const haveUrl = new Set(state.jobs.map(j => j.url));
@@ -126,12 +139,19 @@ if (mode === 'pull') {
       haveUrl.add(h.url);
     }
     run.found = delta.jobs.length;
+    delta.lastPullAt = run.at;
+    }
 
-    // 3. For new jobs (and recent ones still missing a CV): job description → score → tailored CV.
-    const learned = learn(active([...state.feedback, ...delta.feedback]));
-    const rejected = new Set(active([...state.feedback, ...delta.feedback]).filter(f => f.action === 'reject').map(f => f.url));
+    // 3. Job description → score → tailored CV, for new jobs, recent ones still missing a CV, and
+    // every job marked "Interested" without one (built even if a filter hid it: you picked it).
+    const fbNow = active([...state.feedback, ...delta.feedback]);
+    const learned = learn(fbNow);
+    const rejected = new Set(fbNow.filter(f => f.action === 'reject').map(f => f.url));
+    const liked = new Set(fbNow.filter(f => f.action === 'like').map(f => f.url));
     const recent = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
-    const todo = [...delta.jobs, ...state.jobs.filter(j => j.found >= recent && !j.cv && !j.cvSkip)].filter(j => !rejected.has(j.url));
+    const pending = mode === 'pull' ? [...delta.jobs, ...state.jobs.filter(j => j.found >= recent && !j.cv && !j.cvSkip)] : [];
+    const todo = [...state.jobs.filter(j => liked.has(j.url) && !j.cv), ...pending]
+      .filter((j, i, a) => !rejected.has(j.url) && a.findIndex(x => x.url === j.url) === i);
     const kit = input.files['data/cv-kit.json'] ? JSON.parse(input.files['data/cv-kit.json']) : null;
     const pdfKey = input.pdfSalt ? pbkdf2Sync(pass, Buffer.from(input.pdfSalt, 'base64'), ITERATIONS, 32, 'sha256') : null;
     mkdirSync(join(here, 'cvs'), { recursive: true });
@@ -147,7 +167,7 @@ if (mode === 'pull') {
         else u.jd = null;
       }
       const s = score({ ...job, ...u }, learned);
-      if (s.hidden) { u.cvSkip = s.hiddenBy; run.hidden++; }
+      if (s.hidden && !liked.has(job.url)) { u.cvSkip = s.hiddenBy; run.hidden++; }
       else if (!kit || !pdfKey) u.cvSkip = 'no CV kit in the cloud input yet';
       else if (cvs < MAX_CVS) {
         cvs++;
@@ -165,8 +185,7 @@ if (mode === 'pull') {
       if (Object.keys(u).length) delta.updates[job.url] = u;
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
-  delta.lastPullAt = run.at;
-}
+} else if (mode === 'pull') throw new Error('CAREER_OPS_DIR must point at a career-ops checkout.');
 
 delta.run = run;
 save(applyDelta(state, delta));

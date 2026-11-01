@@ -1,6 +1,7 @@
 name: Pull jobs
 
-# Started by the page's "Pull new jobs" button (workflow_dispatch) and every morning at 07:00 IST.
+# Started by the page's "Pull new jobs" button (workflow_dispatch) and twice a day (about 06:00 and 18:00 IST;
+# GitHub can start scheduled runs late). A feedback run saves rejections/interests and builds CVs for "Interested" jobs.
 # A pull scans the boards, reads each new job description, scores it and builds a tailored CV.
 # Everything it reads and writes is encrypted with the TRACKER_PASSPHRASE secret; the log prints counts only.
 on:
@@ -16,10 +17,13 @@ on:
         required: false
         default: ""
   schedule:
-    - cron: "30 1 * * *"
+    # Odd minutes: GitHub delays runs queued on the hour the most.
+    - cron: "17 0 * * *"
+    - cron: "17 12 * * *"
 
 permissions:
   contents: write
+  issues: write   # the "Job alerts" issue comment that makes GitHub email you
 
 concurrency:
   group: pull-jobs
@@ -40,11 +44,9 @@ jobs:
 
       - name: Read the career-ops version to run
         id: ref
-        if: env.MODE == 'pull'
         run: echo "sha=$(tr -dc 0-9a-f < cloud/career-ops-ref)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
-        if: env.MODE == 'pull'
         with:
           repository: career-ops-hq/career-ops
           ref: ${{ steps.ref.outputs.sha }}
@@ -55,7 +57,6 @@ jobs:
           node-version: 22
 
       - name: Install the scanner and the PDF renderer
-        if: env.MODE == 'pull'
         working-directory: .career-ops
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
@@ -91,3 +92,12 @@ jobs:
             sleep 3
           done
           exit 1
+
+      - name: Tell you what it found
+        env:
+          TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DELTA_FILE: ${{ runner.temp }}/delta.json
+        run: node cloud/notify.mjs

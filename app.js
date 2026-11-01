@@ -206,6 +206,8 @@
     const queued = QUEUE.length ? ` · ${QUEUE.length} choice${QUEUE.length === 1 ? '' : 's'} on this device${token() ? ', syncing' : ', not sent yet'}` : '';
     if (mark && mark.mode === 'pull') {
       setPull(`<span class="spinner"></span>Scanning boards, reading job descriptions and building a CV for each new job · started ${ago(new Date(mark.at).toISOString())}. Usually 15–30 minutes; you can close this page.${mark.url ? ` <a href="${esc(mark.url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}`);
+    } else if (mark && mark.mode === 'feedback') {
+      setPull(`<span class="spinner"></span>Saving your choices and building CVs for your picks · started ${ago(new Date(mark.at).toISOString())}. Usually 3–5 minutes.`);
     } else if (!token()) {
       setPull(`Connect once and this button scans your 38 boards in the cloud.${queued}`);
     } else {
@@ -323,39 +325,60 @@
   }
   function applyCard(r, i) {
     const done = store.get(appliedKey(r)) === '1', key = `a${i}`;
-    const meta = [r.posted && `posted ${r.posted}`, r.years && `asks ${r.years}`, r.archetype].filter(Boolean).map(esc).join(' · ');
+    const meta = [r.posted && `posted ${r.posted}`, r.found && `pulled ${r.found}`, r.years && `asks ${r.years}`, r.archetype].filter(Boolean).map(esc).join(' · ');
     return `<article class="card${done ? ' done' : ''}">
-      <p class="co"><span>${esc(r.company)}</span><span>${esc(r.report ? `report ${r.report}` : '')}</span></p>
+      <p class="co"><span>${esc(r.company)}</span><span>${esc(r.report ? `report ${r.report}` : r.pulled ? 'quick score' : '')}</span></p>
       <h3>${esc(r.title)}</h3>
       <div class="row">
         <span class="badge hire" title="Hireability: your realistic chance of an interview">Hire <b>${esc(r.hire)}</b></span>
         <span class="badge" title="How well the role matches your profile">Fit <b>${esc(r.fit)}</b></span>
+        ${r.interested ? '<span class="badge hire">★ Your pick</span>' : ''}
+        ${r.pulled && !r.interested ? '<span class="badge">New from pull</span>' : ''}
         ${r.decision ? badge(r.decision) : ''}
         ${r.closes ? `<span class="badge${closingSoon(r) ? ' urgent' : ''}">closes ${esc(r.closes)}</span>` : ''}
       </div>
       ${r.pay && r.pay !== 'not listed' ? `<div class="row"><span class="badge pay">₹ ${esc(r.pay)}</span></div>` : ''}
       ${r.note ? `<p>${esc(r.note)}</p>` : ''}
+      ${r.why ? `<p class="why">${esc(r.why)}</p>` : ''}
       <p class="meta">${meta}</p>
       <div class="actions">
         ${isUrl(r.url) ? `<a class="btn primary small" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
-        ${r.pdfId ? `<button class="btn ghost small" type="button" data-pdf="${esc(r.pdfId)}" data-name="${esc(r.pdf)}">Download CV ↓</button>` : '<span class="muted mono">CV not built yet</span>'}
+        ${r.pdfId ? `<button class="btn ghost small" type="button" data-pdf="${esc(r.pdfId)}" data-kind="${esc(r.kind || 'pdfs')}" data-name="${esc(r.pdf)}">Download CV ↓</button>` : `<span class="muted mono">${esc(r.cvNote || 'CV not built yet')}</span>`}
         <label class="check"><input type="checkbox" data-applied="${esc(appliedKey(r))}" ${done ? 'checked' : ''}> I applied</label>
         <button class="btn ghost small" type="button" data-open-reject="${key}">Not for me ✕</button>
       </div>
       ${rejectForm(key)}
     </article>`;
   }
+  // Every pulled job that passes your filters, plus every job you marked Interested, joins To apply
+  // next to the fully evaluated roles. Its score is the pull's quick score from the job description.
+  function pulledForApply() {
+    const local = new Set((DATA.toApply || []).map(r => r.url));
+    const tracked = new Set(DATA.tracker.map(r => `${norm(r.company).split(' ')[0]}|${norm(r.role)}`));
+    return (FEED.jobs || []).filter(j => !local.has(j.url) && !tracked.has(`${norm(j.company).split(' ')[0]}|${norm(j.title)}`))
+      .map(j => ({ j, s: S.score(j, LEARNED), c: choiceFor(j.url) }))
+      .filter(({ s, c }) => c?.action === 'like' || (!c && !s.hidden))
+      .map(({ j, s, c }) => ({
+        company: j.company, title: j.title, url: j.url, posted: j.posted, found: j.found, fit: s.fit, hire: s.hire,
+        archetype: s.archetype, years: j.jd?.years != null ? `${j.jd.years}+ yrs` : '', why: s.why.join(' · '),
+        pdfId: j.cv?.id, pdf: j.cv?.name, kind: 'cvs', pulled: true, interested: c?.action === 'like',
+        pay: j.jd?.payLpa != null ? `up to ${j.jd.payLpa.toFixed(1)} LPA (listed)` : '',
+        cvNote: j.cv ? '' : c?.action === 'like' ? 'CV is being built: ready a few minutes after your choice syncs' : j.cvError ? 'CV failed; retried next pull' : 'CV comes with the next pull',
+      }));
+  }
   function renderToApply() {
-    APPLY = [...(DATA.toApply || [])].filter(r => choiceFor(r.url)?.action !== 'reject')
-      .sort((a, b) => b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
+    APPLY = [...(DATA.toApply || []).filter(r => choiceFor(r.url)?.action !== 'reject'), ...pulledForApply()]
+      .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
     const open = APPLY.filter(r => store.get(appliedKey(r)) !== '1');
     const marked = APPLY.filter(r => store.get(appliedKey(r)) === '1');
     $('apply-count').textContent = open.length || '';
     if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + '<p class="empty">Nothing to apply to yet. The next daily run adds roles with a tailored CV.</p>'; return; }
     const cards = list => `<div class="grid">${list.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`;
-    let html = head('03', 'To apply', open.length, 'Each CV is tailored to that posting and fits one A4 page. Read it before you send it.');
+    let html = head('03', 'To apply', open.length, 'Evaluated roles plus every pulled job that passes your filters, each with a one-page CV tailored to it. Read the CV before you send it.');
+    const picks = open.filter(r => r.interested);
+    if (picks.length) html += head('03.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
     GROUPS.forEach(([name, hint, test], g) => {
-      const rows = open.filter(test);
+      const rows = open.filter(r => !r.interested && test(r));
       if (rows.length) html += head(`03.${g + 1}`, name, rows.length, hint) + cards(rows);
     });
     if (marked.length) html += `<details class="fold"><summary>Marked applied on this device (${marked.length})</summary><p class="muted">They leave for good once career-ops sees the confirmation email.</p>${cards(marked)}</details>`;
@@ -403,7 +426,18 @@
     let html = '';
     if (interviews.length) html += head('01', 'Active interviews', interviews.length) + `<div class="grid">${interviews.map(r =>
       `<article class="card"><p class="co"><span>${esc(r.company)}</span><span>#${esc(r.num)}</span></p><h3>${esc(r.role)}</h3><div class="row">${badge(r.status)}</div><p>${esc(r.notes)}</p></article>`).join('')}</div>`;
-    html += dailyHtml(DATA.dailies[0], interviews.length ? '01.1' : '01');
+    // Latest pulls: what the cloud job found in the last 3 days, and how its runs went.
+    const pulls = (FEED.runs || []).filter(r => r.mode === 'pull');
+    const last = pulls[pulls.length - 1];
+    const since = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+    const recentJobs = APPLY.filter(r => r.pulled && (r.found || '') >= since);
+    const runLine = last ? `Last pull ${ago(last.at)}: ${last.found} new, ${last.cvs || 0} CVs built${last.errors?.length ? `, ${last.errors.length} boards unreachable` : ''}. Automatic pulls about 06:00 and 18:00 IST.` : 'No pull yet.';
+    html += head(interviews.length ? '01.1' : '01', 'Latest pulls', recentJobs.length, runLine);
+    html += recentJobs.length ? `<div class="grid">${recentJobs.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`
+      : '<p class="empty">No new jobs in the last 3 days passed your filters. Your boards post a few a week; each one lands here and on To apply.</p>';
+    if (pulls.length) html += `<details class="fold"><summary>Pull history (${pulls.length})</summary><div class="table-wrap"><table><thead><tr><th>When</th><th>New</th><th>CVs</th><th>Filtered</th><th>Boards unreachable</th></tr></thead><tbody>${
+      [...pulls].reverse().map(r => `<tr><td>${esc(new Date(r.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${r.found}</td><td>${r.cvs ?? '—'}</td><td>${r.hidden ?? '—'}</td><td>${r.errors?.length || 0}</td></tr>`).join('')}</tbody></table></div></details>`;
+    html += dailyHtml(DATA.dailies[0], interviews.length ? '01.2' : '01.1');
     $('tab-today').innerHTML = html;
   }
   function renderFollowups() {
@@ -446,14 +480,16 @@
   }
   function renderAll() {
     if (!DATA) return;
-    renderFeed(); renderToApply(); renderKpis(); renderPull();
+    renderFeed(); renderToApply(); renderKpis(); renderPull(); renderToday();
+    // "Updated" = the newest of the local build and the last cloud pull.
+    const stamps = [DATA.builtAt, FEED.updatedAt].filter(Boolean).sort();
+    $('built').textContent = `Updated ${new Date(stamps.pop()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`;
   }
   function show(data, pass) {
     DATA = data; PASS = pass;
     $('lock').hidden = true; $('app').hidden = false;
-    $('built').textContent = `Updated ${new Date(data.builtAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`;
     recompute();
-    renderToday(); renderFollowups(); renderTracker(); renderEvals(); renderHistory(); renderAll();
+    renderFollowups(); renderTracker(); renderEvals(); renderHistory(); renderAll();
     loadFeed(window.JOB_FEED).then(renderAll).then(() => {
       if (!token()) return;
       refreshFeed().catch(() => {});
@@ -528,7 +564,8 @@
     if (like) {
       const j = FEED_JOBS[Number(like.dataset.like)];
       addFeedback({ action: 'like', source: 'feed', url: j.url, company: j.company, title: j.title, location: j.location, archetype: j.s.archetype });
-      toast('Marked interested · the next daily run evaluates it first');
+      toast(j.cv ? 'Added to To apply · your tailored CV is ready there' : `Added to To apply · ${token() ? 'its CV builds in the cloud and is ready in about 5 minutes' : 'press Connect so the cloud can build its CV'}`);
+      scheduleSync(4000);
       return;
     }
     const open = e.target.closest('[data-open-reject]');
