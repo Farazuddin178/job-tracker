@@ -16,6 +16,10 @@ on:
         description: "Encrypted feedback from the page (leave empty)"
         required: false
         default: ""
+      who:
+        description: "Profile id the feedback belongs to (leave empty)"
+        required: false
+        default: ""
   schedule:
     # Odd minutes: GitHub delays runs queued on the hour the most.
     - cron: "17 0 * * *"
@@ -69,6 +73,7 @@ jobs:
           TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
           CAREER_OPS_DIR: ${{ github.workspace }}/.career-ops
           FEEDBACK: ${{ inputs.feedback }}
+          WHO: ${{ inputs.who }}
           DELTA_FILE: ${{ runner.temp }}/delta.json
         run: node cloud/pull.mjs
 
@@ -80,7 +85,8 @@ jobs:
           git config user.name "job-tracker bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for i in 1 2 3 4 5; do
-            git add feed.enc.js cvs
+            # profiles/ and team.enc.js are written only by these serialized runs, so a replay keeps them as they are.
+            for p in feed.enc.js cvs profiles team.enc.js; do if [ -e "$p" ]; then git add -A "$p"; fi; done
             if git diff --cached --quiet; then echo "No change."; exit 0; fi
             git commit -q -m "Pull jobs ($MODE) $(date -u +%F)"
             if git push -q origin HEAD:main; then exit 0; fi

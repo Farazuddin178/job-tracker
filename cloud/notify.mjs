@@ -15,7 +15,7 @@ import { decryptJson, parseFeedScript, passphraseFrom } from './crypto.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active } = globalThis.JobScore;
+const { learn, score, active, groupByCompany } = globalThis.JobScore;
 const SITE = 'https://farazuddin178.github.io/job-tracker/';
 const REPO = process.env.GITHUB_REPOSITORY || 'Farazuddin178/job-tracker';
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
@@ -29,7 +29,8 @@ const rejected = new Set(fb.filter(f => f.action === 'reject').map(f => f.url));
 const scored = j => ({ ...j, s: score(j, learned) });
 const newUrls = new Set((delta.jobs || []).map(j => j.url));
 const fresh = state.jobs.filter(j => newUrls.has(j.url)).map(scored);
-const ready = fresh.filter(j => !j.s.hidden && !rejected.has(j.url)).sort((a, b) => b.s.rank - a.s.rank);
+// Best fit per company, as on the site: the other roles are one click away there.
+const ready = groupByCompany(fresh.filter(j => !j.s.hidden && !rejected.has(j.url)), j => j.s.rank).map(g => g.best).sort((a, b) => b.s.rank - a.s.rank);
 const filtered = fresh.filter(j => j.s.hidden);
 const builtFor = Object.entries(delta.updates || {}).filter(([, u]) => u.cv).map(([url]) => url);
 const live = state.liveness || {};

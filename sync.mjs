@@ -18,7 +18,7 @@ const opsDir = resolve(process.env.CAREER_OPS_DIR || join(here, '..', 'career-op
 const { getCareerOpsRoot } = await import(pathToFileURL(join(opsDir, 'path-resolver.mjs')).href);
 const root = getCareerOpsRoot();
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active } = globalThis.JobScore;
+const { learn, score, active, appliedLog } = globalThis.JobScore;
 
 // The cloud job commits feed.enc.js; get it before reading.
 const remote = spawnSync('git', ['remote'], { cwd: here, encoding: 'utf8' }).stdout.trim();
@@ -89,6 +89,17 @@ for (const f of rejected.values()) {
   if (r.status === 0) log.push(`tracker: report ${f.report} → Discarded`);
   else log.push(`tracker: report ${f.report} left as is (${(r.stderr || r.stdout).trim().split('\n')[0]})`);
   applied.add(f.id);
+}
+
+// 2b. "I applied" on the site moves an evaluated role to Applied, so it leaves To apply on every device.
+for (const a of appliedLog(state.feedback)) {
+  const key = `applied:${a.id}`;
+  if (!a.report || applied.has(key)) continue;
+  const args = ['set-status.mjs', '--report', a.report, 'Applied', '--expect-status', 'Evaluated', `--note=marked applied on the tracker site ${a.date}`];
+  if (dry) { log.push(`would run: node ${args.join(' ')}`); continue; }
+  const r = spawnSync(process.execPath, args, { cwd: opsDir, encoding: 'utf8' });
+  log.push(r.status === 0 ? `tracker: report ${a.report} → Applied` : `tracker: report ${a.report} left as is (${(r.stderr || r.stdout).trim().split('\n')[0]})`);
+  applied.add(key);
 }
 
 // 3. Jobs the cloud found count as seen locally, so the local scan doesn't list them again.

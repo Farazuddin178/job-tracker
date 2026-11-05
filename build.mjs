@@ -13,10 +13,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, pbkdf2Sync, createCipheriv, createHash, createHmac } from 'node:crypto';
 import { encryptJson, feedScript } from './cloud/crypto.mjs';
+import { parseProfiles, profilesScript, profileEntry, entryMatches } from './cloud/profiles.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const opsDir = resolve(process.env.CAREER_OPS_DIR || join(here, '..', 'career-ops'));
 const { getCareerOpsRoot, resolveTrackerPath } = await import(pathToFileURL(join(opsDir, 'path-resolver.mjs')).href);
+const { loadYaml } = await import(pathToFileURL(join(opsDir, 'lib/yaml-document.mjs')).href);
+await import(pathToFileURL(join(here, 'score.js')).href);
+const { appliedFromTracker } = globalThis.JobScore;
 const root = getCareerOpsRoot();
 const ITERATIONS = 310_000;
 
@@ -116,6 +120,28 @@ function toApply(rows) {
   return JSON.parse(readFileSync(file, 'utf8')).filter(role => !taken(role));
 }
 
+// The owner's profile as the site shows it. cv.md and config/profile.yml stay the source of truth;
+// the Settings dialog can only add to this, it never edits those files.
+function profileDefaults() {
+  const p = loadYaml(readFileSync(join(root, 'config/profile.yml'), 'utf8')) || {};
+  const c = p.candidate || {}, a = p.application_answers || {};
+  return {
+    name: c.full_name || '', email: c.email || '', phone: c.phone || '', linkedin: c.linkedin || '', github: c.github || '', location: c.location || '',
+    targetRoles: p.target_roles?.primary || [], skills: [], keywords: [], avoid: [], languages: [],
+    minLpa: Number(String(p.compensation?.minimum || '').replace(/[^\d.]/g, '')) || 4, maxYears: 3, cooldownDays: 60, hideSenior: true,
+    resumeText: readFileSync(join(root, 'cv.md'), 'utf8'),
+    answers: { notice: a.notice_period || '', currentCtc: a.current_ctc || '', expectedCtc: a.expected_ctc || '', whyLeaving: p.narrative?.exit_story || '', totalExperience: a.total_experience || '', workAuth: a.work_authorization || '', skillYears: a.skill_years || [] },
+  };
+}
+
+// Tracker rows you applied through, for the company cooldown. The CV version comes from the to-apply list when known.
+function appliedRoles(rows) {
+  const file = join(root, 'data', 'to-apply.json');
+  const list = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+  const variant = row => list.find(r => norm(r.company).split(' ')[0] === norm(row.company).split(' ')[0] && norm(r.title) === norm(row.title))?.variant;
+  return appliedFromTracker(rows).map(a => ({ ...a, variant: variant(a) }));
+}
+
 // Each CV PDF is encrypted to pdfs/{id}.js with a key from the same passphrase and a fixed
 // local salt, so unchanged PDFs keep their ciphertext between builds. File names are opaque.
 function encryptPdfs(roles, pass) {
@@ -155,8 +181,8 @@ function encryptPdfs(roles, pass) {
 
 // Input for the cloud "Pull new jobs" job (cloud/pull.mjs): the scanner's config and what counts as
 // already seen, encrypted. Rewritten only when the content changes, so it doesn't churn git history.
-function cloudInput(pass) {
-  const files = {};
+function cloudInput(pass, rows) {
+  const files = { 'data/applied.json': JSON.stringify(appliedRoles(rows)) };
   // Scanner config and seen lists, plus what the cloud CV builder needs: cv.md (the fact gate's
   // ground truth), the CV kit (variants built from cv.md) and the PDF salt (below).
   for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md', 'cv.md', 'article-digest.md', 'data/cv-kit.json', 'data/to-apply.json']) {
@@ -185,6 +211,15 @@ function cloudInput(pass) {
   return true;
 }
 
+// Who can log in. Rewritten only when the passphrase changed: every derived passphrase changes with it.
+function ensureProfiles(pass) {
+  const file = join(here, 'profiles.js');
+  const list = existsSync(file) ? parseProfiles(readFileSync(file, 'utf8')) : [];
+  if (list.some(e => e.id === 'me') && list.every(e => entryMatches(pass, e))) return;
+  const ids = ['me', ...list.map(e => e.id).filter(id => id !== 'me')];
+  writeFileSync(file, profilesScript(ids.map(id => profileEntry(pass, id))));
+}
+
 // feed.enc.js belongs to the cloud job; create an empty one only if it has never run.
 function ensureFeed(pass) {
   const f = join(here, 'feed.enc.js');
@@ -196,8 +231,9 @@ function ensureFeed(pass) {
 const trackerRows = tracker();
 const applyList = toApply(trackerRows);
 const pdfInfo = encryptPdfs(applyList, passphrase());
-const cloudChanged = cloudInput(passphrase());
+const cloudChanged = cloudInput(passphrase(), trackerRows);
 ensureFeed(passphrase());
+ensureProfiles(passphrase());
 const payload = {
   builtAt: new Date().toISOString(),
   tracker: trackerRows,
@@ -206,6 +242,7 @@ const payload = {
   dailies: dailies(),
   toApply: applyList,
   pdfSalt: pdfInfo.salt,
+  profile: profileDefaults(),
 };
 
 const salt = randomBytes(16), iv = randomBytes(12);

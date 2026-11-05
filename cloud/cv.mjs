@@ -48,7 +48,21 @@ const SHRINK = [
   (p, kit) => { const i = p.projects.findIndex(x => x.description === kit.projects.LEGAL_LONG?.description); if (i >= 0) { p.projects[i] = structuredClone(kit.projects.LEGAL_SHORT); return 'short legal-project line'; } },
   (p) => { if (p.certifications.length > 1) { p.certifications = p.certifications.slice(0, 1); return 'dropped training line'; } },
   (p) => { if (p.skills.length > 2) { p.skills = p.skills.slice(0, 2); return 'dropped 3rd skills line'; } },
+  (p) => { const j = [...p.experience].sort((a, b) => b.bullets.length - a.bullets.length)[0]; if (j?.bullets.length > 2) { j.bullets.pop(); return 'dropped the least relevant bullet'; } },
 ];
+
+// The CV as plain text, for application forms and agents that can't take a file.
+export function cvText(p) {
+  const c = p.candidate, out = [c.name, [c.location, c.phone, c.email, c.linkedin, c.github].filter(Boolean).join(' | ')];
+  if (p.summary) out.push('', 'SUMMARY', p.summary);
+  if (p.experience?.length) out.push('', 'EXPERIENCE');
+  for (const j of p.experience || []) out.push(`${j.role}, ${j.company} (${j.dates})`, ...j.bullets.map(b => `- ${b}`));
+  if (p.projects?.length) out.push('', 'PROJECTS', ...p.projects.map(x => `- ${x.name}: ${x.description}`));
+  if (p.education?.length) out.push('', 'EDUCATION', ...p.education.map(e => `- ${[e.title, e.org, e.year].filter(Boolean).join(', ')}`));
+  if (p.certifications?.length) out.push('', 'CERTIFICATIONS', ...p.certifications.map(x => `- ${[x.title, x.org].filter(Boolean).join(', ')}`));
+  if (p.skills?.length) out.push('', 'SKILLS', ...p.skills.map(x => `- ${x.category}: ${x.items}`));
+  return out.join('\n');
+}
 
 const titleCase = s => String(s).replace(/\(.*?\)/g, ' ').replace(/[^A-Za-z0-9 ]+/g, ' ').trim().split(/\s+/)
   .map(w => (w.length <= 3 && w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1).toLowerCase())).join('');
@@ -66,19 +80,20 @@ export function pdfName(kit, title, company) {
 
 /**
  * Render one CV. opsDir: career-ops checkout; env: must carry CAREER_OPS_ROOT (the data root with cv.md).
- * Returns { ok, pdf, variant, ats, notes, error }.
+ * variant forces a kit variant (a company you already applied to keeps the version you sent it).
+ * Returns { ok, pdf, text, variant, ats, notes, error }.
  */
-export function renderCv({ opsDir, env, kit, job, jdText, workDir, override }) {
+export function renderCv({ opsDir, env, kit, job, jdText, workDir, override, variant: forced }) {
   mkdirSync(workDir, { recursive: true });
   const run = args => { const r = spawnSync(process.execPath, args, { cwd: opsDir, env, encoding: 'utf8', timeout: 180_000 }); return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}`.trim() }; };
   const template = run(['cv-templates.mjs', 'resolve', 'cv']).out.split('\n').pop();
-  const variant = override ? 'tailored' : pickVariant(job.title, jdText);
+  const variant = override ? 'tailored' : forced && kit.variants[forced] ? forced : pickVariant(job.title, jdText);
   const payload = override ? structuredClone(override) : payloadFrom(kit, variant);
   const slug = Math.random().toString(36).slice(2, 10);
   const json = join(workDir, `cv-${slug}.json`), html = join(workDir, `cv-${slug}.html`), pdf = join(workDir, `cv-${slug}.pdf`);
   const notes = [];
   let error = null, ats = null;
-  for (let attempt = 0; attempt <= SHRINK.length; attempt++) {
+  for (let attempt = 0; attempt <= 10; attempt++) {
     writeFileSync(json, JSON.stringify(payload, null, 2));
     error = null;
     for (const [label, args] of [
@@ -101,5 +116,5 @@ export function renderCv({ opsDir, env, kit, job, jdText, workDir, override }) {
   }
   if (error && existsSync(pdf)) unlinkSync(pdf); // a failed --strict-pages render still writes the file
   for (const f of [json, html]) if (existsSync(f)) unlinkSync(f);
-  return { ok: !error, pdf: error ? null : pdf, variant, ats, notes, error };
+  return { ok: !error, pdf: error ? null : pdf, text: error ? '' : cvText(payload), variant, ats, notes, error };
 }

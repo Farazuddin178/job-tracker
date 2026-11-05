@@ -6,6 +6,10 @@
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#0e100c">
   <title>Job Hunt</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="site.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -21,6 +25,7 @@
       <h1 class="display">JOB<br>HUNT</h1>
       <p class="kicker">T h e &nbsp; n e x t &nbsp; r o l e</p>
       <p class="serif">Every rejection<br>teaches the search.</p>
+      <div id="lock-known" class="lock-known" hidden></div>
       <form id="lock-form" class="lock-form" autocomplete="off">
         <label for="pass" class="sr-only">Passphrase</label>
         <input id="pass" type="password" placeholder="Passphrase" required autofocus>
@@ -37,7 +42,7 @@
     <header class="bar">
       <a class="brand" href="#" data-tab="today">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 2 22 12 12 22 2 12Z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7 17 12 12 17 7 12Z" fill="currentColor"/></svg>
-        <span><b>JOB HUNT</b><small>Private tracker</small></span>
+        <span><b>JOB HUNT</b><small id="who">Private tracker</small></span>
       </a>
       <nav class="tabs" role="tablist" aria-label="Sections">
         <button role="tab" data-tab="today" aria-selected="true"><i>01</i>Today</button>
@@ -47,8 +52,11 @@
         <button role="tab" data-tab="tracker"><i>05</i>Tracker</button>
         <button role="tab" data-tab="evals"><i>06</i>Evaluations</button>
         <button role="tab" data-tab="history"><i>07</i>History</button>
+        <button role="tab" data-tab="team" hidden><i>08</i>Team</button>
       </nav>
       <div class="bar-end">
+        <button id="settings-btn" class="btn ghost small" type="button">Settings</button>
+        <button id="switch-btn" class="btn ghost small" type="button" hidden>Switch profile</button>
         <button id="connect-btn" class="btn ghost small" type="button">Connect</button>
         <button id="lock-btn" class="btn ghost small" type="button">Lock</button>
       </div>
@@ -86,6 +94,7 @@
     </section>
     <section id="tab-evals" class="panel" hidden></section>
     <section id="tab-history" class="panel" hidden></section>
+    <section id="tab-team" class="panel" hidden></section>
 
     <footer class="foot mono">
       <span>Encrypted · AES-256-GCM</span><span>career-ops</span><span>Never auto-applies</span>
@@ -96,7 +105,7 @@
     <form method="dialog" class="dialog-body" id="connect-form">
       <p class="eyebrow"><span class="dot"></span> One-time setup</p>
       <h2 class="display small">CONNECT THE PULL BUTTON</h2>
-      <p>The button starts a job on GitHub that scans your 38 company boards and adds new matches here. It needs two things, once:</p>
+      <p>The button starts a job on GitHub that scans the company boards and adds new matches here. If someone gave you a token, paste it below and skip the steps. Otherwise it needs two things, once:</p>
       <ol class="steps">
         <li><b>A secret on the repo.</b> In <a href="https://github.com/Farazuddin178/job-tracker/settings/secrets/actions/new" target="_blank" rel="noopener noreferrer">Settings → Secrets → Actions</a>, add <code>TRACKER_PASSPHRASE</code> with this page's passphrase as the value.</li>
         <li><b>A token for this device.</b> <a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create a fine-grained token</a>: repository access <i>Only select repositories → job-tracker</i>; permissions <i>Actions: Read and write</i> and <i>Contents: Read-only</i>. Paste it below.</li>
@@ -113,11 +122,81 @@
     </form>
   </dialog>
 
+  <dialog id="settings" class="dialog wide" aria-labelledby="s-title">
+    <form method="dialog" class="dialog-body" id="settings-form">
+      <p class="eyebrow"><span class="dot"></span> Profile</p>
+      <h2 class="display small" id="s-title">YOUR PROFILE</h2>
+      <fieldset class="form-grid"><legend>About you</legend>
+        <label>Name<input id="s-name" required maxlength="120" autocomplete="name"></label>
+        <label>Email<input id="s-email" type="email" required maxlength="200" autocomplete="email"></label>
+        <label>Phone<input id="s-phone" maxlength="40" autocomplete="tel"></label>
+        <label>Location<input id="s-location" maxlength="200" placeholder="City, State, Country"></label>
+        <label>LinkedIn<input id="s-linkedin" maxlength="200"></label>
+        <label>GitHub<input id="s-github" maxlength="200"></label>
+      </fieldset>
+      <fieldset><legend>Base resume</legend>
+        <p class="muted small-print" id="s-resume-note"></p>
+        <label id="s-resume-file-row">Load from a PDF or text file<input id="s-resume-file" type="file" accept=".pdf,.txt,.md"></label>
+        <label class="sr-only" for="s-resume">Resume text</label>
+        <textarea id="s-resume" rows="9" maxlength="30000" spellcheck="false" placeholder="Summary, Experience, Projects, Education, Skills"></textarea>
+        <p class="mono small-print" id="s-check"></p>
+      </fieldset>
+      <fieldset class="form-grid"><legend>What to look for</legend>
+        <label class="span">Target roles (comma separated)<input id="s-roles" placeholder="Marketing Analyst, Growth Analyst"></label>
+        <label class="span">Skills<input id="s-skills" placeholder="SEO, Google Analytics, SQL"></label>
+        <label class="span">Extra title keywords<input id="s-keywords" placeholder="Words that make a title worth a look"></label>
+        <label>Titles to avoid<input id="s-avoid" placeholder="Sales, Recruiter"></label>
+        <label>Languages you speak<input id="s-languages" placeholder="German, Tamil"></label>
+        <label>Lowest pay (LPA)<input id="s-minlpa" type="number" min="0" step="0.5"></label>
+        <label>Hide jobs asking this many years or more<input id="s-maxyears" type="number" min="1" max="30"></label>
+        <label>Company cooldown after applying (30–60 days)<input id="s-cooldown" type="number" min="30" max="60"></label>
+        <label class="check" id="s-senior-row"><input id="s-senior" type="checkbox"> Hide senior titles</label>
+      </fieldset>
+      <fieldset class="form-grid"><legend>Answers for application forms</legend>
+        <p class="muted small-print span">The agent uses only these. Leave one empty and it asks you instead of guessing.</p>
+        <label>Notice period<input id="s-notice" maxlength="200"></label>
+        <label>Work authorization<input id="s-auth" maxlength="200"></label>
+        <label>Current CTC<input id="s-ctc" maxlength="200"></label>
+        <label>Expected CTC<input id="s-expected" maxlength="200"></label>
+        <label class="span">Total experience<input id="s-total" maxlength="200" placeholder="1 year 9 months"></label>
+        <label class="span">Why you're moving on<textarea id="s-why" rows="2" maxlength="300"></textarea></label>
+        <label class="span">Years by skill, one per line<textarea id="s-years" rows="3" placeholder="Python: 2 years"></textarea></label>
+      </fieldset>
+      <p id="s-msg" class="mono" role="status"></p>
+      <div class="actions">
+        <button class="btn primary" id="s-save" type="button">Save</button>
+        <button class="btn ghost" value="close" formnovalidate>Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="agent" class="dialog wide" aria-labelledby="agent-title">
+    <form method="dialog" class="dialog-body">
+      <p class="eyebrow"><span class="dot"></span> AI Auto-Apply</p>
+      <h2 class="display small" id="agent-title"></h2>
+      <p>Paste the prompt into Claude in Chrome or another browser agent. It fills the form and stops before Submit, so you review it and click Submit yourself.</p>
+      <p id="agent-warn" class="cool" role="alert" hidden></p>
+      <section id="ai-agent-payload" aria-label="Application data for an AI agent"></section>
+      <label for="agent-prompt" class="mono">Agent prompt</label>
+      <textarea id="agent-prompt" rows="7" readonly spellcheck="false"></textarea>
+      <label for="agent-resume" class="mono">Resume as plain text</label>
+      <textarea id="agent-resume" rows="5" readonly spellcheck="false"></textarea>
+      <div class="actions">
+        <button class="btn primary" type="button" data-copy-from="agent-prompt">Copy Agent Prompt</button>
+        <a id="agent-cv" class="btn ghost" hidden>Download CV ↓</a>
+        <button class="btn ghost" value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="data.enc.js"></script>
   <script src="feed.enc.js" onerror="window.JOB_FEED=null"></script>
+  <script src="profiles.js" onerror="window.JOB_PROFILES=null"></script>
+  <script src="team.enc.js" onerror="window.JOB_TEAM=null"></script>
   <script src="score.js"></script>
+  <script src="agent.js"></script>
   <script src="app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" defer></script>
   <script src="fx.js" defer></script>

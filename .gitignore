@@ -1,6 +1,7 @@
 .passphrase
 node_modules/
 *.png
+!icons/*.png
 .pdf-salt
 .pdf-cache.json
 .cloud-input-hash

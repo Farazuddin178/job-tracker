@@ -324,3 +324,36 @@ code { font-family: var(--mono); font-size: .85em; padding: .05rem .35rem; borde
   #app.compact .kpi { border-bottom: 0; border-right: 1px solid var(--line); }
   #app.compact .pull p { font-size: 10.5px; }
 }
+
+/* ── Profiles, company guardrails, AI Auto-Apply ─────────────────────── */
+[hidden] { display: none !important; }
+.badge.team { color: var(--info); border-color: rgba(159, 184, 214, .45); text-transform: none; letter-spacing: .02em; }
+.cool { margin: .6rem 0 0; padding: .5rem .65rem; border-left: 2px solid var(--warn); background: rgba(230, 179, 87, .08); color: var(--warn); font-size: .86rem; }
+.card p.cool { color: var(--warn); }
+.others { margin-top: .9rem; border-top: 1px dashed var(--line-2); padding-top: .6rem; }
+.others > summary { cursor: pointer; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.others > summary:hover { color: var(--ink); }
+.others .grid { margin-top: .7rem; grid-template-columns: 1fr; }
+.best-toggle { margin: 0 0 1rem; }
+.lock-known { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1rem; position: relative; z-index: 1; }
+.team-list { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .5rem; font-size: .92rem; color: var(--ink-2); }
+.team-list b { color: var(--ink); font-weight: 600; }
+.dialog.wide { max-width: 760px; }
+.dialog fieldset { border: 1px solid var(--line); margin: 0; padding: 14px; min-width: 0; }
+.dialog legend { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--red-2); padding: 0 .4rem; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.form-grid .span { grid-column: 1 / -1; }
+.dialog label:not(.check):not(.sr-only) { display: grid; gap: .3rem; font-size: .84rem; color: var(--ink-2); }
+.dialog input:not([type="checkbox"]), .dialog textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--ink); border: 1px solid var(--line-2); padding: .5rem .6rem; font: inherit; font-size: .9rem; }
+.dialog textarea { resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.agent-fields { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem 1rem; }
+.agent-fields dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.agent-fields dd { margin: .1rem 0 0; font-size: .88rem; overflow-wrap: anywhere; color: var(--ink); }
+@media (max-width: 1500px) {
+  .bar { flex-wrap: wrap; gap: .4rem .8rem; }
+  .tabs { order: 3; flex-basis: 100%; justify-content: flex-start; }
+  .bar-end { margin-left: auto; }
+}
+@media (max-width: 620px) {
+  .form-grid, .agent-fields { grid-template-columns: 1fr; }
+}

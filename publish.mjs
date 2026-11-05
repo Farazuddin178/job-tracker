@@ -19,7 +19,7 @@ const run = (cmd, args, opts = {}) => {
 // Pull the cloud job's commits and apply the page's feedback to career-ops first.
 run(process.execPath, ['sync.mjs'], { stdio: 'inherit' });
 run(process.execPath, ['build.mjs'], { stdio: 'inherit' });
-run('git', ['add', 'index.html', 'styles.css', 'app.js', 'build.mjs', 'publish.mjs', 'README.md', '.gitignore', 'data.enc.js', 'score.js', 'sync.mjs', 'fx.js']);
+run('git', ['add', 'index.html', 'styles.css', 'app.js', 'build.mjs', 'publish.mjs', 'README.md', '.gitignore', 'data.enc.js', 'score.js', 'sync.mjs', 'fx.js', 'add-profile.mjs', 'agent.js', 'profiles.js', 'favicon.svg', 'site.webmanifest', 'icons']);
 run('git', ['add', '-A', 'cloud', '.github']);
 if (!run('git', ['ls-files', 'feed.enc.js'], { allowFail: true }).stdout.trim()) run('git', ['add', 'feed.enc.js']); // first run only; the cloud job owns it
 run('git', ['add', '-A', 'pdfs']); // encrypted CVs, including removed ones
