@@ -71,6 +71,7 @@
   let DATA = null, PASS = null, ID = 'me', TEAM_PASS = null;
   let FEED = { jobs: [], feedback: [], runs: [] };
   let PROFILE = null, PREFS = S.prefsFrom(null), TEAM = null, LOCKS = {};
+  let profileSaved = false, pendingProfile = null; // pendingProfile: settings waiting for Connect
   let QUEUE = [];
   const loadQueue = () => { try { QUEUE = JSON.parse(store.get(forProfile(QUEUE_KEY, ID)) || '[]'); } catch { QUEUE = []; } };
   const saveQueue = () => store.set(forProfile(QUEUE_KEY, ID), JSON.stringify(QUEUE));
@@ -212,7 +213,7 @@
     const at = Date.now();
     const r = await gh(`/actions/workflows/${WORKFLOW}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main', inputs: { mode, feedback, who: ID } }) });
     if (r.status !== 204) throw new Error(`GitHub did not start the job (${r.status}).`);
-    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at }));
+    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at, profile: !!profile }));
     renderPull();
     schedulePoll(4000);
   }
@@ -236,7 +237,8 @@
       return;
     }
     await refreshFeed();
-    await loadProfile();
+    if (await loadProfile()) { profileSaved = true; clearDraft(); }
+    else if (mark.profile) { setPull('Your profile did not save. Open Settings and press Save again.'); return; }
     recompute(); renderAll();
     const last = (FEED.runs || []).slice(-1)[0];
     if (mark.mode === 'pull') toast(!last ? 'Pull finished'
@@ -319,6 +321,8 @@
       setPull(`<span class="spinner"></span>Checking every posting on your lists · started ${ago(new Date(mark.at).toISOString())}. Usually 5–10 minutes.`);
     } else if (mark && mark.mode === 'feedback') {
       setPull(`<span class="spinner"></span>Saving your choices and building CVs for your picks · started ${ago(new Date(mark.at).toISOString())}. Usually 3–5 minutes.`);
+    } else if (ID !== 'me' && !profileSaved) {
+      setPull('Save your profile in Settings first. Your jobs are matched to your resume and target roles.');
     } else if (!token()) {
       setPull(`Connect once and this button scans your company boards in the cloud.${queued}`);
     } else {
@@ -682,6 +686,8 @@
     renderFollowups(); renderTracker(); renderEvals(); renderHistory(); renderAll();
     if (window.JOB_TEAM && team) { try { TEAM = await decryptEnc(team, window.JOB_TEAM); } catch { /* the refresh below tries again */ } }
     const saved = await loadProfile();
+    profileSaved = saved;
+    if (saved) clearDraft(); else await restoreDraft();
     if (id === 'me') await loadFeed(window.JOB_FEED);
     await refreshFeed().catch(() => {});
     recompute(); renderAll(); migrateApplied();
@@ -711,8 +717,26 @@
     const c = FEED.resumeCheck;
     $('s-check').innerHTML = ID === 'me' || !c ? '' : c.problems.length ? `<b>Resume check:</b> ${c.problems.map(esc).join(' ')}` : `<b>Resume check:</b> read ${c.jobs} job${c.jobs === 1 ? '' : 's'}, ${c.bullets} bullets, ${c.projects} projects, ${c.skills} skill lines.`;
     $('s-title').textContent = first ? 'SET UP YOUR PROFILE' : 'YOUR PROFILE';
-    $('s-msg').textContent = token() ? '' : 'Saving needs Connect first.';
+    $('s-msg').textContent = '';
     $('settings').showModal();
+  }
+  // What was typed before the first save survives Connect and a reload. Encrypted like everything else.
+  const draftKey = () => forProfile('jt-profile-draft', ID);
+  const clearDraft = () => store.del(draftKey());
+  const saveDraft = async p => store.set(draftKey(), JSON.stringify(await encryptJson(PASS, p)));
+  async function restoreDraft() {
+    try { const enc = JSON.parse(store.get(draftKey()) || 'null'); if (enc) PROFILE = { ...PROFILE, ...(await decryptEnc(PASS, enc)) }; }
+    catch { clearDraft(); }
+  }
+  // The first save also starts the first pull: until then there was nothing to match jobs against.
+  async function saveProfile(next) {
+    const first = !profileSaved;
+    await dispatch(first ? 'pull' : 'feedback', next);
+    PROFILE = next; pendingProfile = null;
+    recompute(); renderAll();
+    if ($('settings').open) $('settings').close();
+    toast(first ? 'Saved. Your first pull has started: jobs and CVs land here in about 15–30 minutes. You can close this page.'
+      : 'Saved. Matching uses it now; the cloud keeps it from the next run, about 3–5 minutes away.', 9000);
   }
   function readSettings() {
     const p = { ...PROFILE, answers: { ...PROFILE.answers } };
@@ -812,7 +836,9 @@
       const r = await gh(`/actions/workflows/${WORKFLOW}`);
       if (!r.ok) throw new Error(`GitHub said ${r.status}.`);
       $('connect-msg').textContent = 'Connected. The first pull also checks the TRACKER_PASSPHRASE secret.';
-      renderPull(); refreshFeed().catch(() => {}); if (QUEUE.length) scheduleSync(3000);
+      renderPull(); refreshFeed().catch(() => {});
+      if (pendingProfile) { $('connect-msg').textContent = 'Connected. Saving your profile…'; await saveProfile(pendingProfile); $('connect').close(); }
+      else if (QUEUE.length) scheduleSync(3000);
     } catch (err) {
       if (old) store.set(TOKEN_KEY, old); else store.del(TOKEN_KEY);
       $('connect-msg').textContent = err.message;
@@ -866,18 +892,23 @@
   });
   $('s-save').addEventListener('click', async () => {
     if (!$('settings-form').reportValidity()) return;
-    if (!token()) { $('settings').close(); openConnect(); return; }
     const next = readSettings();
+    if (ID !== 'me' && (!next.resumeText || !next.targetRoles.length)) { $('s-msg').textContent = 'Add your resume and at least one target role: jobs are matched to them.'; return; }
+    await saveDraft(next);
+    if (!token()) {
+      pendingProfile = next; PROFILE = next; // nothing typed is lost; it saves itself after Connect
+      $('settings').close(); openConnect();
+      $('connect-msg').textContent = 'Paste the token to finish saving your profile.';
+      return;
+    }
     $('s-msg').textContent = 'Saving…';
-    try {
-      await dispatch('feedback', next);
-      PROFILE = next;
-      recompute(); renderAll();
-      $('settings').close();
-      toast('Saved. Matching uses it now; the cloud keeps it from the next run, about 3–5 minutes away.');
-    } catch (err) { $('s-msg').textContent = err.message; }
+    try { await saveProfile(next); }
+    catch (err) { $('s-msg').textContent = err.message; }
   });
-  $('pull-btn').addEventListener('click', () => dispatch('pull').catch(err => setPull(esc(err.message))));
+  $('pull-btn').addEventListener('click', () => {
+    if (ID !== 'me' && !profileSaved) { openSettings(true); return; }
+    dispatch('pull').catch(err => setPull(esc(err.message)));
+  });
   function selectTab(tab) {
     document.querySelectorAll('.tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     document.querySelectorAll('.panel').forEach(p => { p.hidden = p.id !== `tab-${tab}`; });

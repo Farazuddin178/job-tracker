@@ -142,7 +142,9 @@ const POSITIVE = /(title_filter:\s*\n(?:\s*#.*\n)*\s*positive:\s*\n(?:\s*#.*\n)*
 const positiveList = text => [...(text.match(POSITIVE)?.[2] || '').matchAll(/^\s*-\s*["']?(?:word:)?(.+?)["']?\s*(?:#.*)?$/gm)].map(m => m[1].toLowerCase());
 // The scanner's own rule: a substring, except that a 2-3 letter keyword ("AI") must be a whole word.
 const wantsTitle = (title, words) => { const t = title.toLowerCase(); return words.some(w => (w.length <= 3 ? new RegExp(`\\b${w.replace(/[^a-z0-9]/g, '')}\\b`).test(t) : t.includes(w))); };
-const titleWords = p => [...(p?.targetRoles || []), ...(p?.keywords || [])].map(w => w.toLowerCase());
+// "Junior Data Analyst" must also catch a plain "Data Analyst" posting, so level words don't count.
+const LEVEL = /\b(junior|jr\.?|senior|sr\.?|associate|entry[- ]level|trainee|graduate|fresher)\b/g;
+const titleWords = p => [...(p?.targetRoles || []), ...(p?.keywords || [])].map(w => w.toLowerCase().replace(LEVEL, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
 
 // Both modes need the career-ops tools: a pull scans and builds CVs; a feedback run builds the CV
 // for any job just marked "Interested" that doesn't have one yet.
