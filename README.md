@@ -64,6 +64,12 @@ Matching is per profile. `score.js` `prefsFrom` turns Settings into rules. The o
 
 Another profile's CV comes from `cloud/resume.mjs`. It parses their resume into the career-ops CV shape, then for each job reorders bullets, projects and skills by the job description and drops the least relevant lines if the page overflows. It never adds words, and the same gates run as for the owner. The Settings dialog shows what the parser read.
 
+### What each profile gets
+
+- **Jobs:** one shared scan of the company boards. Each person's list is filtered to their own target roles and job locations (their home city and remote in India when Job locations is empty), so a place only one person asked for never reaches the other.
+- **Tailored CVs:** from their base resume, reordered and never added to. Settings checks the resume as soon as it is pasted or loaded (PDF, Word or text) and says what it could read.
+- **Email:** their own jobs, sent through the Gmail app password to the address in their own saved profile. Nobody else receives it, and nothing goes to employers.
+
 ## Company guardrails
 
 - **Best fit per company** (on by default, toggle on New jobs and To apply): each company shows its top role by fit × hireability; the others sit under "View X other roles at this company".

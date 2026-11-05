@@ -4,25 +4,28 @@
 // cv.md and the payload come from the same parse, which is what lets the career-ops fact gate pass.
 
 const clean = s => String(s || '').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim();
-const BULLET = /^\s*(?:[-*•▪●◦·‣–—]|\d+[.)])\s+/;
+// PDF text often loses the space after a bullet, and Word's bullets arrive as private-use characters.
+const BULLET = /^\s*(?:[•▪●◦·‣■□○➢➤✓✔\uf000-\uf8ff]\s*|[-*–—]\s+|\d+[.)]\s+)/;
 const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
 const POINT = `(?:${MONTH}\\s*,?\\s*\\d{4}|\\d{1,2}/\\d{4}|\\d{4})`;
-const DATES = new RegExp(`${POINT}\\s*(?:-|–|—|to)\\s*(?:${POINT}|present|current|now|till date|ongoing)`, 'i');
+const DATES = new RegExp(`${POINT}\\s*(?:-|–|—|to)\\s*(?:${POINT}|present|current|now|till (?:date|now)|ongoing)`, 'i');
 const YEARS = new RegExp(`${POINT}(?:\\s*(?:-|–|—|to)\\s*(?:${POINT}|present))?`, 'i');
-const TITLE = /\b(engineer|developer|analyst|intern|manager|associate|specialist|consultant|lead|officer|executive|designer|administrator|architect|scientist|coordinator|assistant|trainee|programmer|tester|strategist|recruiter|writer)\b/i;
+const TITLE = /\b(engineer|developer|analyst|intern|manager|associate|specialist|consultant|lead|officer|executive|designer|administrator|architect|scientist|coordinator|assistant|trainee|programmer|tester|strategist|recruiter|writer|researcher|fellow|research assistant)\b/i;
 const DEGREE = /\b(b\.?\s?tech|b\.?\s?e\b|b\.?\s?sc|b\.?\s?com|b\.?\s?a\b|bca|bba|m\.?\s?tech|m\.?\s?sc|mba|mca|m\.?\s?a\b|bachelor|master|ph\.?d|diploma|degree|intermediate|ssc|hsc|12th|10th)\b/i;
 
 const SECTIONS = [
   ['summary', /^(professional |career |personal )?(summary|profile|objective)$|^about( me)?$/],
-  ['experience', /^((work|professional|relevant|industry)\s+)?experience$|^employment( history)?$|^work history$|^internships?$/],
-  ['projects', /^((academic|personal|key|selected)\s+)?projects$/],
+  ['experience', /^((work|professional|relevant|industry|research|employment)\s+)?experiences?(\s*(&|and)\s*internships?)?$|^employment( history)?$|^work history$|^internships?(\s*(&|and)\s*experience)?$|^career history$/],
+  ['projects', /^((academic|personal|key|selected|research|notable|major|technical)\s+)?projects$|^projects?\s*(&|and)\s*publications$/],
   ['education', /^education(al qualifications?)?$|^academics?$|^academic (background|qualifications?)$/],
-  ['skills', /^((technical|core|key|professional)\s+)?(skills|competencies)$|^technologies$|^tools( & technologies)?$/],
+  ['skills', /^((technical|core|key|professional|relevant)\s+)?(skills|competencies|proficiency|expertise)(\s*(&|and)\s*(tools|technologies|interests))?$|^technologies$|^tools( & technologies)?$/],
   ['certs', /^(certifications?|certificates?|licenses?|training|courses?)( (&|and) (training|certifications?|courses?))?$/],
-  ['other', /^(awards|honou?rs|achievements|interests|hobbies|languages|publications|references|activities|volunteering|declaration|extra.*)$/],
+  ['other', /^((selected|research|key)\s+)?(awards|honou?rs|achievements|interests|hobbies|languages|publications|papers|patents|references|activities|volunteering|declaration|extra.*|conferences|talks|positions of responsibility|leadership)((\s*(&|and)\s*\w+))?$/],
 ];
 function sectionOf(line) {
-  const t = clean(line.replace(/^#+\s*/, '')).replace(/[:|]+$/, '').toLowerCase();
+  let t = clean(line.replace(/^#+\s*/, '')).replace(/[:|]+$/, '').trim().toLowerCase();
+  // Letter-spaced headings: "W O R K  E X P E R I E N C E". Their word gaps rarely survive PDF text.
+  if (/^([a-z] ){3,}[a-z]( |$)/.test(t)) t = t.replace(/ /g, '').replace(/^(work|professional|relevant|industry|research|employment|technical|core|key|academic|personal|selected|career)(?=[a-z])/, '$1 ');
   if (!t || t.split(' ').length > 5) return null;
   return SECTIONS.find(([, re]) => re.test(t))?.[0] || null;
 }
@@ -39,11 +42,17 @@ function splitHead(parts) {
 function parseExperience(lines) {
   const jobs = [];
   let cur = null, pending = [];
+  const BULLET_LESS = new Set(); // jobs whose lines carry no bullet marker at all
   const spill = () => {
     if (!pending.length) return;
-    if (cur?.bullets.length) cur.bullets[cur.bullets.length - 1] += ` ${pending.join(' ')}`; // a wrapped line
+    // Bullets drawn as shapes leave plain lines; a line that starts in lower case continues the one above.
+    pending = pending.reduce((out, l) => { if (/^[a-z]/.test(l) && out.length) out[out.length - 1] += ` ${l}`; else out.push(l); return out; }, []);
+    if (cur?.bullets.length && /^[a-z]/.test(pending[0])) { cur.bullets[cur.bullets.length - 1] += ` ${pending.shift()}`; }
+    if (!pending.length) return;
+    if (cur?.bullets.length && BULLET_LESS.has(cur)) cur.bullets.push(...pending);
+    else if (cur?.bullets.length) cur.bullets[cur.bullets.length - 1] += ` ${pending.join(' ')}`; // a wrapped line
     else if (cur && !cur.company) cur.company = splitHead(pending).company || clean(pending[0]);
-    else if (cur) cur.bullets.push(...pending);
+    else if (cur) { cur.bullets.push(...pending); BULLET_LESS.add(cur); }
     pending = [];
   };
   for (const raw of lines) {
@@ -52,11 +61,12 @@ function parseExperience(lines) {
     if (!text) continue;
     const date = !bullet && text.match(DATES);
     if (date) {
-      // At most the last two short lines above the dates are the job's heading; anything else is wrapped text.
-      const head = pending.slice(-2).filter(l => l.length <= 70);
+      const here = clean(text.replace(date[0], '').replace(/[(|,–—-]+\s*\)?\s*$/, ''));
+      // The heading: this line when it names the role; else up to two short lines above it. Anything else is text of the job before.
+      const need = here && TITLE.test(here) ? 0 : here ? 1 : 2;
+      const head = need ? pending.slice(-need).filter(l => l.length <= 70) : [];
       pending = pending.slice(0, pending.length - head.length);
       spill();
-      const here = clean(text.replace(date[0], '').replace(/[(|,–—-]+\s*\)?\s*$/, ''));
       cur = { ...splitHead(here ? [...head, here] : head), dates: clean(date[0]), bullets: [] };
       jobs.push(cur);
     } else if (bullet) { spill(); cur?.bullets.push(text); }
@@ -122,7 +132,8 @@ export function parseResume(text, profile) {
   const payload = {
     lang: 'en', page_format: 'a4', candidate,
     sections: { summary: 'Summary', experience: 'Experience', projects: 'Projects', education: 'Education', certifications: 'Certifications', skills: 'Skills' },
-    summary: clean((sections.summary || []).join(' ')),
+    // No Summary heading: their own introduction, if the top of the page has one, is the summary.
+    summary: clean((sections.summary || []).join(' ')) || clean((sections.top || []).filter(l => clean(l).length > 80 && !/@|https?:|linkedin|\+?\d[\d\s-]{8,}/i.test(l)).join(' ')),
     experience, projects: parseProjects(sections.projects || []), education: parseEducation(sections.education || []),
     certifications: (sections.certs || []).map(l => clean(l.replace(BULLET, ''))).filter(Boolean).map(title => ({ title, org: '', year: '' })),
     skills: parseSkills(sections.skills || []),
@@ -132,7 +143,12 @@ export function parseResume(text, profile) {
   if (!candidate.email) problems.push('Add your email in Settings.');
   if (!payload.summary) problems.push('No Summary section found.');
   if (!experience.length && !payload.projects.length) problems.push('No Experience or Projects section found. Put each job on its own line with its dates, like "Jan 2024 – Present".');
-  if ((sections.experience || []).some(l => DATES.test(l)) && !experience.length) problems.push('Found dates under Experience, but could not tell the job title from the company.');
+  // Never drop a job quietly: a CV missing someone's experience is worse than no CV.
+  const expLines = (sections.experience || []).filter(l => clean(l));
+  const dated = expLines.filter(l => !BULLET.test(l) && DATES.test(clean(l))).length;
+  if (dated && !experience.length) problems.push('Found dates under Experience, but could not tell the job title from the company.');
+  else if (expLines.length && !dated) problems.push('Found an Experience section, but no job dates in it. Put each job on its own line with its dates, like "Data Scientist, Acme, Jan 2024 – Present".');
+  else if (dated > experience.length) problems.push(`Could read only ${experience.length} of ${dated} jobs under Experience. Put each job on its own line as "Title, Company, Jan 2024 – Present".`);
   if (!payload.skills.length) problems.push('No Skills section found.');
   if (!payload.education.length) problems.push('No Education section found.');
   const check = { jobs: experience.length, bullets: experience.reduce((n, j) => n + j.bullets.length, 0), projects: payload.projects.length, skills: payload.skills.length, problems };

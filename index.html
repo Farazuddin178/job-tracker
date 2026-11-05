@@ -131,12 +131,13 @@
         <label>Email<input id="s-email" type="email" required maxlength="200" autocomplete="email"></label>
         <label>Phone<input id="s-phone" maxlength="40" autocomplete="tel"></label>
         <label>Location<input id="s-location" maxlength="200" placeholder="City, State, Country"></label>
+        <label id="s-places-row">Job locations<input id="s-places" maxlength="300" placeholder="Bengaluru, Hyderabad (empty: your city and remote in India)"></label>
         <label>LinkedIn<input id="s-linkedin" maxlength="200"></label>
         <label>GitHub<input id="s-github" maxlength="200"></label>
       </fieldset>
       <fieldset><legend>Base resume</legend>
         <p class="muted small-print" id="s-resume-note"></p>
-        <label id="s-resume-file-row">Load from a PDF or text file<input id="s-resume-file" type="file" accept=".pdf,.txt,.md"></label>
+        <label id="s-resume-file-row">Load from a PDF, Word or text file<input id="s-resume-file" type="file" accept=".pdf,.docx,.txt,.md"></label>
         <label class="sr-only" for="s-resume">Resume text</label>
         <textarea id="s-resume" rows="9" maxlength="30000" spellcheck="false" placeholder="Summary, Experience, Projects, Education, Skills"></textarea>
         <p class="mono small-print" id="s-check"></p>

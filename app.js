@@ -72,6 +72,24 @@
   let FEED = { jobs: [], feedback: [], runs: [] };
   let PROFILE = null, PREFS = S.prefsFrom(null), TEAM = null, LOCKS = {};
   let profileSaved = false, pendingProfile = null; // pendingProfile: settings waiting for Connect
+  let cloudSig = ''; // what the last saved profile asked for, to tell when a save needs a pull
+  const matchSig = p => JSON.stringify([p?.resumeText, p?.targetRoles, p?.keywords, p?.location, p?.jobLocations, p?.minLpa, p?.maxYears]);
+  const needsSetup = () => ID !== 'me' && !(profileSaved && PROFILE.resumeText);
+
+  // A tab left open keeps running the old page, so it checks for a new version and reloads itself.
+  let pageTag = null;
+  async function pageIsOld() {
+    try {
+      const tag = (await fetch('app.js', { method: 'HEAD', cache: 'no-store' })).headers.get('etag');
+      if (tag && !pageTag) pageTag = tag;
+      return !!tag && tag !== pageTag;
+    } catch { return false; }
+  }
+  async function keepFresh() {
+    if (document.querySelector('dialog[open]') || !(await pageIsOld())) return false;
+    location.reload();
+    return true;
+  }
   let QUEUE = [];
   const loadQueue = () => { try { QUEUE = JSON.parse(store.get(forProfile(QUEUE_KEY, ID)) || '[]'); } catch { QUEUE = []; } };
   const saveQueue = () => store.set(forProfile(QUEUE_KEY, ID), JSON.stringify(QUEUE));
@@ -204,7 +222,7 @@
   let syncTimer = null, pollTimer = null;
   const currentRun = () => { try { return JSON.parse(store.get(forProfile(RUN_KEY, ID)) || 'null'); } catch { return null; } };
 
-  async function dispatch(mode, profile) {
+  async function dispatch(mode, profile, tries = 0) {
     if (!token()) { openConnect(); return; }
     clearTimeout(syncTimer);
     const items = QUEUE.slice(0, 400);
@@ -213,7 +231,7 @@
     const at = Date.now();
     const r = await gh(`/actions/workflows/${WORKFLOW}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main', inputs: { mode, feedback, who: ID } }) });
     if (r.status !== 204) throw new Error(`GitHub did not start the job (${r.status}).`);
-    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at, profile: !!profile }));
+    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at, profile: !!profile, tries }));
     renderPull();
     schedulePoll(4000);
   }
@@ -228,16 +246,19 @@
       if (Date.now() - mark.at > 5 * 60_000) { store.del(forProfile(RUN_KEY, ID)); setPull('GitHub never started the job. Try again in a minute.'); return; }
       schedulePoll(5000); return;
     }
+    if (mark.profile && run.status === 'completed' && runs.some(x => x.status !== 'completed' && new Date(x.created_at) >= mark.at - 60_000)) { schedulePoll(15000); return; }
     mark.url = run.html_url; mark.status = run.status;
     store.set(forProfile(RUN_KEY, ID), JSON.stringify(mark));
     if (run.status !== 'completed') { renderPull(); schedulePoll(mark.mode === 'pull' ? 15000 : 6000); return; }
     store.del(forProfile(RUN_KEY, ID));
+    if (run.conclusion === 'cancelled' && mark.profile && (mark.tries || 0) < 3) { await dispatch(mark.mode, PROFILE, (mark.tries || 0) + 1); return; }
+    if (run.conclusion === 'cancelled') { setPull('GitHub cancelled that run because another one was queued. Press the button again.'); return; }
     if (run.conclusion !== 'success') {
       setPull(`The job failed. Most often the <code>TRACKER_PASSPHRASE</code> secret is missing or differs from your passphrase. <a href="${esc(run.html_url)}" target="_blank" rel="noopener noreferrer">See the run ↗</a>`);
       return;
     }
     await refreshFeed();
-    if (await loadProfile()) { profileSaved = true; clearDraft(); }
+    if (await loadProfile()) { profileSaved = true; if (!(await restoreDraft())) cloudSig = matchSig(PROFILE); }
     else if (mark.profile) { setPull('Your profile did not save. Open Settings and press Save again.'); return; }
     recompute(); renderAll();
     const last = (FEED.runs || []).slice(-1)[0];
@@ -321,8 +342,8 @@
       setPull(`<span class="spinner"></span>Checking every posting on your lists · started ${ago(new Date(mark.at).toISOString())}. Usually 5–10 minutes.`);
     } else if (mark && mark.mode === 'feedback') {
       setPull(`<span class="spinner"></span>Saving your choices and building CVs for your picks · started ${ago(new Date(mark.at).toISOString())}. Usually 3–5 minutes.`);
-    } else if (ID !== 'me' && !profileSaved) {
-      setPull('Save your profile in Settings first. Your jobs are matched to your resume and target roles.');
+    } else if (needsSetup()) {
+      setPull('Add your resume and target roles in Settings. Your jobs and CVs come from them.');
     } else if (!token()) {
       setPull(`Connect once and this button scans your company boards in the cloud.${queued}`);
     } else {
@@ -687,19 +708,21 @@
     if (window.JOB_TEAM && team) { try { TEAM = await decryptEnc(team, window.JOB_TEAM); } catch { /* the refresh below tries again */ } }
     const saved = await loadProfile();
     profileSaved = saved;
-    if (saved) clearDraft(); else await restoreDraft();
+    cloudSig = saved ? matchSig(PROFILE) : '';
+    await restoreDraft();
     if (id === 'me') await loadFeed(window.JOB_FEED);
     await refreshFeed().catch(() => {});
     recompute(); renderAll(); migrateApplied();
     rememberName();
-    if (id !== 'me' && !saved) openSettings(true);
+    if (needsSetup()) openSettings(true);
+    pageIsOld();
     if (!token()) return;
     if (currentRun()) poll().catch(err => setPull(esc(err.message)));
     else if (QUEUE.length) scheduleSync(5000);
   }
 
   // ── Settings ────────────────────────────────────────────────────────
-  const LISTS = { 's-roles': 'targetRoles', 's-skills': 'skills', 's-keywords': 'keywords', 's-avoid': 'avoid', 's-languages': 'languages' };
+  const LISTS = { 's-places': 'jobLocations', 's-roles': 'targetRoles', 's-skills': 'skills', 's-keywords': 'keywords', 's-avoid': 'avoid', 's-languages': 'languages' };
   const FIELDS = { 's-name': 'name', 's-email': 'email', 's-phone': 'phone', 's-linkedin': 'linkedin', 's-github': 'github', 's-location': 'location', 's-minlpa': 'minLpa', 's-maxyears': 'maxYears', 's-cooldown': 'cooldownDays', 's-resume': 'resumeText' };
   const ANSWERS = { 's-notice': 'notice', 's-ctc': 'currentCtc', 's-expected': 'expectedCtc', 's-why': 'whyLeaving', 's-total': 'totalExperience', 's-auth': 'workAuth' };
   const splitList = v => v.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
@@ -713,29 +736,51 @@
     $('s-senior-row').hidden = ID === 'me';
     $('s-resume').readOnly = ID === 'me';
     $('s-resume-file-row').hidden = ID === 'me';
+    $('s-places-row').hidden = ID === 'me'; // the owner's places live in portals.yml
+    $('s-resume-file').value = ''; // a file name left here would look loaded when the text below is empty
     $('s-resume-note').textContent = ID === 'me' ? 'Your resume comes from cv.md, so what the checks compare against stays in one place. Change it there.' : 'Paste it, or load a PDF and check the text it found. Keep the section headings. CVs reorder this text and never add to it.';
-    const c = FEED.resumeCheck;
-    $('s-check').innerHTML = ID === 'me' || !c ? '' : c.problems.length ? `<b>Resume check:</b> ${c.problems.map(esc).join(' ')}` : `<b>Resume check:</b> read ${c.jobs} job${c.jobs === 1 ? '' : 's'}, ${c.bullets} bullets, ${c.projects} projects, ${c.skills} skill lines.`;
+    checkResume();
     $('s-title').textContent = first ? 'SET UP YOUR PROFILE' : 'YOUR PROFILE';
     $('s-msg').textContent = '';
     $('settings').showModal();
   }
-  // What was typed before the first save survives Connect and a reload. Encrypted like everything else.
+  // What the resume text gives the CV builder, shown before saving instead of a pull later.
+  // The same parser the cloud runs, so what this says is what the CVs get.
+  let parser = null, checkTimer = null;
+  async function checkResume() {
+    if (ID === 'me') { $('s-check').textContent = ''; return; }
+    const text = $('s-resume').value.trim();
+    if (!text) { $('s-check').innerHTML = '<b>Resume check:</b> no resume yet. Without one you get jobs but no tailored CVs.'; return; }
+    try {
+      parser ||= await import('./cloud/resume.mjs');
+      const c = parser.parseResume(text, { name: $('s-name').value, email: $('s-email').value }).check;
+      const read = `Read ${c.jobs} job${c.jobs === 1 ? '' : 's'}, ${c.bullets} bullets, ${c.projects} project${c.projects === 1 ? '' : 's'}, ${c.skills} skill line${c.skills === 1 ? '' : 's'}.`;
+      $('s-check').innerHTML = `<b>Resume check:</b> ${read}${c.problems.length ? ` Fix these: ${c.problems.map(esc).join(' ')}` : ' Ready for tailored CVs.'}`;
+    } catch { /* the cloud repeats this check */ }
+  }
+  // What was typed survives Connect, a reload and a new version of the page. Encrypted like everything else.
   const draftKey = () => forProfile('jt-profile-draft', ID);
   const clearDraft = () => store.del(draftKey());
   const saveDraft = async p => store.set(draftKey(), JSON.stringify(await encryptJson(PASS, p)));
+  // True when an unsaved draft newer than the saved profile was put back.
   async function restoreDraft() {
-    try { const enc = JSON.parse(store.get(draftKey()) || 'null'); if (enc) PROFILE = { ...PROFILE, ...(await decryptEnc(PASS, enc)) }; }
-    catch { clearDraft(); }
+    try {
+      const enc = JSON.parse(store.get(draftKey()) || 'null');
+      if (!enc) return false;
+      const draft = await decryptEnc(PASS, enc);
+      if (profileSaved && (draft.updatedAt || '') <= (PROFILE.updatedAt || '')) { clearDraft(); return false; }
+      PROFILE = { ...PROFILE, ...draft };
+      return true;
+    } catch { clearDraft(); return false; }
   }
-  // The first save also starts the first pull: until then there was nothing to match jobs against.
+  // New resume, roles or places mean new matches, so the save starts a pull; other changes only save.
   async function saveProfile(next) {
-    const first = !profileSaved;
-    await dispatch(first ? 'pull' : 'feedback', next);
-    PROFILE = next; pendingProfile = null;
+    const pull = !profileSaved || !FEED.lastPullAt || matchSig(next) !== cloudSig;
+    await dispatch(pull ? 'pull' : 'feedback', next);
+    PROFILE = next; pendingProfile = null; profileSaved = true; cloudSig = matchSig(next);
     recompute(); renderAll();
     if ($('settings').open) $('settings').close();
-    toast(first ? 'Saved. Your first pull has started: jobs and CVs land here in about 15–30 minutes. You can close this page.'
+    toast(pull ? 'Saved. A pull has started: your jobs and tailored CVs land here in about 15–30 minutes, and you get an email. You can close this page.'
       : 'Saved. Matching uses it now; the cloud keeps it from the next run, about 3–5 minutes away.', 9000);
   }
   function readSettings() {
@@ -761,14 +806,58 @@
       document.head.appendChild(el);
     });
   }
+  // A PDF stores text in drawing order, not reading order (right-aligned dates often come first),
+  // so lines are rebuilt from where each piece sits on the page.
+  function linesOf(parts) {
+    const rows = [];
+    for (const p of [...parts].sort((a, b) => b.y - a.y)) {
+      const row = rows.find(r => Math.abs(r.y - p.y) < Math.min(r.h, p.h) * 0.5);
+      if (row) row.parts.push(p); else rows.push({ y: p.y, h: p.h, parts: [p] });
+    }
+    return rows.map(r => {
+      let out = '', end = null;
+      for (const p of r.parts.sort((a, b) => a.x - b.x)) {
+        if (end != null && p.x - end > p.h * 0.12 && !/\s$/.test(out)) out += ' ';
+        out += p.s;
+        end = p.x + p.w;
+      }
+      return out.trim();
+    }).filter(Boolean);
+  }
+  function pageText(items, width) {
+    const parts = items.filter(i => i.str.trim()).map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width || 0, h: Math.abs(i.transform[3]) || 10 }));
+    // Two columns: a vertical gap almost nothing crosses, with real text on both sides.
+    let gutter = null, fewest = Infinity;
+    for (let g = width * 0.25; g <= width * 0.75; g += width / 40) {
+      const left = parts.filter(p => p.x + p.w <= g).length, right = parts.filter(p => p.x >= g).length;
+      const crossing = parts.length - left - right;
+      if (left > parts.length * 0.2 && right > parts.length * 0.2 && crossing < fewest) { fewest = crossing; gutter = g; }
+    }
+    if (gutter != null && fewest <= Math.max(1, parts.length * 0.03)) {
+      return [...linesOf(parts.filter(p => p.x < gutter)), ...linesOf(parts.filter(p => p.x >= gutter))].join('\n');
+    }
+    return linesOf(parts).join('\n');
+  }
+  const MAMMOTH = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
+  function loadMammoth() {
+    if (window.mammoth) return Promise.resolve(window.mammoth);
+    return new Promise((ok, fail) => {
+      const el = Object.assign(document.createElement('script'), { src: MAMMOTH });
+      el.onload = () => ok(window.mammoth);
+      el.onerror = () => fail(new Error('Could not load the Word reader. Paste the text instead.'));
+      document.head.appendChild(el);
+    });
+  }
   async function resumeFromFile(file) {
+    if (/\.docx$/i.test(file.name)) return (await (await loadMammoth()).extractRawText({ arrayBuffer: await file.arrayBuffer() })).value;
+    if (/\.doc$/i.test(file.name)) throw new Error('Old .doc files cannot be read here. Save it as .docx or PDF, or paste the text.');
     if (!/\.pdf$/i.test(file.name)) return file.text();
     const lib = await loadPdfJs();
     const doc = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
     const pages = [];
     for (let n = 1; n <= doc.numPages; n++) {
-      const { items } = await (await doc.getPage(n)).getTextContent();
-      pages.push(items.map(i => i.str + (i.hasEOL ? '\n' : '')).join(''));
+      const page = await doc.getPage(n);
+      pages.push(pageText((await page.getTextContent()).items, page.getViewport({ scale: 1 }).width));
     }
     return pages.join('\n');
   }
@@ -882,19 +971,37 @@
     location.reload();
   });
   $('switch-btn').addEventListener('click', () => { try { sessionStorage.setItem('jt-switch', '1'); } catch { /* storage unavailable */ } location.reload(); });
+  let lastLook = Date.now();
+  async function lookAgain() {
+    if (document.hidden || !PASS || Date.now() - lastLook < 120_000) return;
+    lastLook = Date.now();
+    if (await keepFresh()) return;
+    if (!currentRun()) refreshFeed().catch(() => {});
+  }
+  document.addEventListener('visibilitychange', lookAgain);
+  addEventListener('focus', lookAgain);
+  setInterval(lookAgain, 300_000);
   $('settings-btn').addEventListener('click', () => openSettings(false));
   $('s-resume-file').addEventListener('change', async e => {
     const file = e.target.files[0];
     if (!file) return;
     $('s-msg').textContent = 'Reading…';
-    try { $('s-resume').value = (await resumeFromFile(file)).trim(); $('s-msg').textContent = 'Check the text, then save.'; }
-    catch (err) { $('s-msg').textContent = err.message || 'Could not read that file. Paste the text instead.'; }
+    try {
+      const text = (await resumeFromFile(file)).trim();
+      // An image-only PDF has no text to read; don't let it pass for a loaded resume.
+      if (text.length < 50) { e.target.value = ''; $('s-msg').textContent = 'No text found in that file: it is probably a scanned image. Upload a Word file or a PDF exported from Word or Google Docs, or paste the text below.'; return; }
+      $('s-resume').value = text;
+      $('s-msg').textContent = 'Resume loaded. Check the text below, then save.';
+      checkResume();
+    } catch (err) { e.target.value = ''; $('s-msg').textContent = err.message || 'Could not read that file. Paste the text instead.'; }
   });
+  for (const el of ['s-resume', 's-name', 's-email']) $(el).addEventListener('input', () => { clearTimeout(checkTimer); checkTimer = setTimeout(checkResume, 400); });
   $('s-save').addEventListener('click', async () => {
     if (!$('settings-form').reportValidity()) return;
     const next = readSettings();
-    if (ID !== 'me' && (!next.resumeText || !next.targetRoles.length)) { $('s-msg').textContent = 'Add your resume and at least one target role: jobs are matched to them.'; return; }
+    if (ID !== 'me' && (next.resumeText.length < 50 || !next.targetRoles.length)) { $('s-msg').textContent = 'Add your resume and at least one target role: jobs are matched to them.'; return; }
     await saveDraft(next);
+    if (await pageIsOld()) { location.reload(); return; } // the new page puts this draft back
     if (!token()) {
       pendingProfile = next; PROFILE = next; // nothing typed is lost; it saves itself after Connect
       $('settings').close(); openConnect();
@@ -906,7 +1013,7 @@
     catch (err) { $('s-msg').textContent = err.message; }
   });
   $('pull-btn').addEventListener('click', () => {
-    if (ID !== 'me' && !profileSaved) { openSettings(true); return; }
+    if (needsSetup()) { openSettings(true); return; }
     dispatch('pull').catch(err => setPull(esc(err.message)));
   });
   function selectTab(tab) {

@@ -106,4 +106,5 @@ jobs:
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DELTA_FILE: ${{ runner.temp }}/delta.json
+          WHO: ${{ inputs.who }}
         run: node cloud/notify.mjs

@@ -119,7 +119,7 @@ function cleanProfile(raw) {
     updatedAt: str(raw.updatedAt, 30), name: str(raw.name, 120), email: str(raw.email, 200), phone: str(raw.phone, 40), linkedin: str(raw.linkedin), github: str(raw.github), location: str(raw.location),
     targetRoles: strs(raw.targetRoles), skills: strs(raw.skills), keywords: strs(raw.keywords), avoid: strs(raw.avoid), languages: strs(raw.languages),
     minLpa: Number(raw.minLpa) || 0, maxYears: Number(raw.maxYears) || 3, cooldownDays: Math.min(60, Math.max(30, Number(raw.cooldownDays) || 60)), hideSenior: raw.hideSenior !== false,
-    resumeText: str(raw.resumeText, 30_000),
+    resumeText: str(raw.resumeText, 30_000), jobLocations: strs(raw.jobLocations),
     answers: { notice: str(a.notice), currentCtc: str(a.currentCtc), expectedCtc: str(a.expectedCtc), whyLeaving: str(a.whyLeaving, 300), totalExperience: str(a.totalExperience), workAuth: str(a.workAuth), skillYears: strs(a.skillYears, 60) },
   };
 }
@@ -139,12 +139,29 @@ const pickKeys = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).fil
 
 // The title_filter.positive block of portals.yml, as text so its 160 KB of comments stay untouched.
 const POSITIVE = /(title_filter:\s*\n(?:\s*#.*\n)*\s*positive:\s*\n(?:\s*#.*\n)*)((?:\s*-\s.*\n|\s*#.*\n)*)/;
+const ALLOW = /(^location_filter:\s*\n(?:\s*#.*\n)*\s*allow:\s*\n(?:\s*#.*\n)*)((?:\s*-\s.*\n|\s*#.*\n)*)/m;
 const positiveList = text => [...(text.match(POSITIVE)?.[2] || '').matchAll(/^\s*-\s*["']?(?:word:)?(.+?)["']?\s*(?:#.*)?$/gm)].map(m => m[1].toLowerCase());
 // The scanner's own rule: a substring, except that a 2-3 letter keyword ("AI") must be a whole word.
 const wantsTitle = (title, words) => { const t = title.toLowerCase(); return words.some(w => (w.length <= 3 ? new RegExp(`\\b${w.replace(/[^a-z0-9]/g, '')}\\b`).test(t) : t.includes(w))); };
 // "Junior Data Analyst" must also catch a plain "Data Analyst" posting, so level words don't count.
 const LEVEL = /\b(junior|jr\.?|senior|sr\.?|associate|entry[- ]level|trainee|graduate|fresher)\b/g;
-const titleWords = p => [...(p?.targetRoles || []), ...(p?.keywords || [])].map(w => w.toLowerCase().replace(LEVEL, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+// Boards spell the same role differently: "ML Engineer" is also "Machine Learning Engineer".
+const VARIANTS = [[/\bml\b/, 'machine learning'], [/\bmachine learning\b/, 'ml'], [/\bai\b/, 'artificial intelligence'], [/\bartificial intelligence\b/, 'ai'], [/\bdata scientist\b/, 'data science'], [/\bsde\b/, 'software development engineer'], [/\bswe\b/, 'software engineer']];
+const titleWords = p => {
+  const words = [...(p?.targetRoles || []), ...(p?.keywords || [])].map(w => w.toLowerCase().replace(LEVEL, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return [...new Set(words.flatMap(w => [w, ...VARIANTS.filter(([re]) => re.test(w)).map(([re, to]) => w.replace(re, to))]))];
+};
+// Each person's own places. The scan reads the union; every job is then checked against the person it goes to.
+const ALIASES = [['bengaluru', 'bangalore'], ['gurugram', 'gurgaon'], ['mumbai', 'bombay', 'navi mumbai'], ['chennai', 'madras'], ['kolkata', 'calcutta'], ['hyderabad', 'secunderabad', 'gachibowli', 'hitec city', 'hitech city'], ['delhi', 'new delhi'], ['thiruvananthapuram', 'trivandrum'], ['kochi', 'cochin'], ['pune', 'pimpri']];
+const REMOTE_INDIA = ['remote - india', 'india - remote', 'remote, india', 'india, remote', 'india (remote)', 'remote (india)', 'remote india', 'india remote', 'work from home'];
+const homeCity = p => String(p?.location || '').split(',')[0].trim().toLowerCase();
+const placeWords = p => {
+  const asked = (p?.jobLocations || []).map(w => w.toLowerCase().trim()).filter(Boolean);
+  const places = asked.length ? asked : [homeCity(p)].filter(Boolean);
+  return [...new Set(places.flatMap(w => ALIASES.find(a => a.includes(w)) || [w]))];
+};
+const wantsPlace = (location, words) => { const l = String(location || '').toLowerCase(); return !l || !words.length || [...words, ...REMOTE_INDIA].some(w => l.includes(w)); };
+const NO_RESUME = 'no CV source yet';
 
 // Both modes need the career-ops tools: a pull scans and builds CVs; a feedback run builds the CV
 // for any job just marked "Interested" that doesn't have one yet.
@@ -154,7 +171,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
   const input = decryptJson(pass, JSON.parse(readFileSync(join(here, 'cloud/input.enc.json'), 'utf8')));
   const root = mkdtempSync(join(tmpdir(), 'jobs-'));
   const env = { ...process.env, CAREER_OPS_ROOT: root, TRACKER_PASSPHRASE: '', FEEDBACK: '' };
-  const ready = friends.filter(f => f.profile?.resumeText);
+  const ready = friends.filter(f => titleWords(f.profile).length);
   try {
     for (const [rel, text] of Object.entries(input.files)) {
       if (rel.includes('..')) continue;
@@ -192,7 +209,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const nameKit = { projects: {}, base: { candidate: { name: c.name || 'Candidate' } } };
       f.pdfName = job => pdfName(nameKit, job.title, job.company);
       // A company already applied to needs no lock here: one resume, reordered, can't contradict itself.
-      f.render = parsed.check.problems.some(p => /name|email|Experience/.test(p)) ? null
+      f.render = !f.profile.resumeText || parsed.check.problems.some(p => /name|email|Experience/.test(p)) ? null
         : (job, jdText) => renderCv({ opsDir, env: fEnv, kit: nameKit, job, jdText, workDir: join(fRoot, 'cv-work'), override: tailor(parsed.payload, jdText, topTerms) });
     }
 
@@ -209,7 +226,14 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
     const portals = existsSync(portalsFile) ? readFileSync(portalsFile, 'utf8') : '';
     const ownerWords = [...positiveList(portals), ...titleWords(me.profile)];
     const added = [...new Set([...titleWords(me.profile), ...ready.flatMap(f => titleWords(f.profile))])];
-    if (added.length && POSITIVE.test(portals)) writeFileSync(portalsFile, portals.replace(POSITIVE, (m, a, b) => `${a}${added.map(w => `    - ${JSON.stringify(w)}\n`).join('')}${b}`));
+    const ownerPlaces = (portals.match(ALLOW)?.[2] || '').split('\n').map(l => l.match(/^\s*-\s*["']?(.+?)["']?\s*(?:#.*)?$/)?.[1]?.toLowerCase()).filter(Boolean);
+    const friendPlaces = [...new Set(ready.flatMap(f => placeWords(f.profile)))].filter(w => !ownerPlaces.includes(w));
+    // A place only a friend asked for: passed the filter for them, so it stays off the owner's list.
+    const onlyFriends = loc => { const l = String(loc || '').toLowerCase(); return friendPlaces.some(w => l.includes(w)) && !ownerPlaces.some(w => l.includes(w)); };
+    let scanPortals = portals;
+    if (added.length && POSITIVE.test(scanPortals)) scanPortals = scanPortals.replace(POSITIVE, (m, a, b) => `${a}${added.map(w => `    - ${JSON.stringify(w)}\n`).join('')}${b}`);
+    if (friendPlaces.length && ownerPlaces.length) scanPortals = scanPortals.replace(ALLOW, (m, a, b) => `${a}${friendPlaces.map(w => `    - ${JSON.stringify(w)}\n`).join('')}${b}`);
+    if (scanPortals !== portals) writeFileSync(portalsFile, scanPortals);
     const scan = () => {
       const res = spawnSync(process.execPath, ['scan.mjs', '--json', '--quiet', '--since', '21'], { cwd: opsDir, env, encoding: 'utf8', timeout: 40 * 60_000, maxBuffer: 64 << 20 });
       let rec = null;
@@ -236,14 +260,17 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       fresh.push({ url: h.url, company: h.company, title: h.title, location: h.location, posted: h.posted_at || '', found: today, portal: h.portal });
     }
     // A job only the friend's keywords caught doesn't belong on the owner's list, and the reverse.
-    for (const j of fresh) if (!haveUrl.has(j.url) && wantsTitle(j.title, ownerWords)) { delta.jobs.push(j); haveUrl.add(j.url); }
+    for (const j of fresh) if (!haveUrl.has(j.url) && wantsTitle(j.title, ownerWords) && !onlyFriends(j.location)) { delta.jobs.push(j); haveUrl.add(j.url); }
     run.found = delta.jobs.length;
     delta.lastPullAt = run.at;
+    // Every posting of the last three weeks, not just this run's: a new or changed profile sees them all.
+    const since = new Date(Date.now() - 21 * 86_400_000).toISOString().slice(0, 10);
+    const recent = scanHistoryDataLines(readFileSync(histFile, 'utf8')).filter(Boolean).map(parseScanHistoryLine)
+      .filter(h => h.status === 'added' && h.first_seen >= since && state.liveness?.[h.url]?.status !== 'expired')
+      .map(h => ({ url: h.url, company: h.company, title: h.title, location: h.location, posted: h.posted_at || '', found: today, portal: h.portal }));
     for (const f of ready) {
-      const words = titleWords(f.profile), have = new Set(f.state.jobs.map(j => j.url));
-      // A profile's first pull also starts from the postings already on the owner's recent list.
-      const pool = f.state.lastPullAt ? fresh : [...state.jobs.map(({ url, company, title, location, posted, portal }) => ({ url, company, title, location, posted, portal, found: today })), ...fresh];
-      for (const j of pool) if (!have.has(j.url) && wantsTitle(j.title, words)) { f.delta.jobs.push(j); have.add(j.url); }
+      const words = titleWords(f.profile), places = placeWords(f.profile), have = new Set(f.state.jobs.map(j => j.url));
+      for (const j of recent) if (!have.has(j.url) && wantsTitle(j.title, words) && wantsPlace(j.location, places)) { f.delta.jobs.push(j); have.add(j.url); }
       f.run.found = f.delta.jobs.length;
       f.delta.lastPullAt = run.at;
     }
@@ -279,7 +306,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const lockOf = job => locks[normCompany(job.company)];
       const recent = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
       const all = [...P.state.jobs, ...P.delta.jobs];
-      const pending = mode === 'pull' ? [...P.delta.jobs, ...P.state.jobs.filter(j => j.found >= recent && !j.cv && !j.cvSkip)] : [];
+      const pending = mode === 'pull' ? [...P.delta.jobs, ...P.state.jobs.filter(j => j.found >= recent && !j.cv && (!j.cvSkip || j.cvSkip === NO_RESUME || R.settings))] : [];
       // A CV built before you applied to that company, in a different version from the one you sent.
       const contradicting = mode === 'pull' && P.lockedVariant ? P.state.jobs.filter(j => j.cv && lockOf(j) && j.cv.variant !== P.lockedVariant(lockOf(j))) : [];
       const todo = [...P.state.jobs.filter(j => liked.has(j.url) && !j.cv), ...pending, ...contradicting]
@@ -300,13 +327,13 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
         const s = score(view(job), learned, P.prefs), u = updates[job.url] || {};
         if (s.hidden && !liked.has(job.url)) { u.cvSkip = s.hiddenBy; R.hidden++; }
         else if (!best.has(job.url) && !liked.has(job.url)) u.cvLater = true;
-        else if (!P.render || !P.pdfKey) u.cvSkip = 'no CV source yet';
+        else if (!P.render || !P.pdfKey) u.cvSkip = NO_RESUME;
         else if (cvs < MAX_CVS) {
           cvs++;
           const out = P.render(job, readJd(job.url), lockOf(job));
           if (out.ok) {
             u.cv = { id: storeCv(P, job, out), name: P.pdfName(job), variant: out.variant, ats: out.ats, cuts: out.notes, at: today };
-            u.cvLater = false; u.cvError = undefined;
+            u.cvLater = false; u.cvError = undefined; u.cvSkip = undefined;
             R.cvs++;
           } else { u.cvError = out.error; R.cvFailed++; }
         }
@@ -381,6 +408,7 @@ for (const f of friends) {
   if (d.feedback.length || d.jobs.length || Object.keys(d.updates).length || d.liveness || d.resumeCheck || f.run.settings) {
     if (mode === 'pull' || f.run.feedback || f.run.cvs) d.run = f.run;
     writeEnc(friendFeedFile(f.id), f.pass, applyDelta(f.state, d));
+    if (process.env.DELTA_FILE) writeFileSync(`${process.env.DELTA_FILE}.${f.id}`, JSON.stringify(encryptJson(f.pass, d))); // for the mail
   }
 }
 // Counts only: Actions logs of a public repo are public, so never print company names or titles.
