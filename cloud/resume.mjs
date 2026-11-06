@@ -62,12 +62,18 @@ function parseExperience(lines) {
     const date = !bullet && text.match(DATES);
     if (date) {
       const here = clean(text.replace(date[0], '').replace(/[(|,–—-]+\s*\)?\s*$/, ''));
-      // The heading: this line when it names the role; else up to two short lines above it. Anything else is text of the job before.
-      const need = here && TITLE.test(here) ? 0 : here ? 1 : 2;
-      const head = need ? pending.slice(-need).filter(l => l.length <= 70) : [];
+      // "Acme Labs, Pune" above "Data Scientist  Jan 2026 - Present": the date line has the role and the line above has
+      // the company. A line that reads like the end of a sentence is not a heading; it stays with the job before.
+      const roleOnly = here && TITLE.test(here) && !splitHead([here]).company;
+      const headLike = l => l.length <= 70 && /^[A-Z0-9]/.test(l) && !/[.;:]$/.test(l);
+      // The heading: this line when it names the role and company; else up to two short lines above it.
+      const need = roleOnly ? 1 : here && TITLE.test(here) ? 0 : here ? 1 : 2;
+      const head = need ? pending.slice(-need).filter(l => l.length <= 70 && (!roleOnly || headLike(l))) : [];
       pending = pending.slice(0, pending.length - head.length);
       spill();
-      cur = { ...splitHead(here ? [...head, here] : head), dates: clean(date[0]), bullets: [] };
+      const [company = '', ...place] = roleOnly && head.length ? head.join(', ').split(/\s*,\s+|\s*\|\s*/).map(clean).filter(Boolean) : [];
+      cur = company ? { role: here, company, location: place.join(', '), dates: clean(date[0]), bullets: [] }
+        : { ...splitHead(here ? [...head, here] : head), dates: clean(date[0]), bullets: [] };
       jobs.push(cur);
     } else if (bullet) { spill(); cur?.bullets.push(text); }
     else pending.push(text);
@@ -123,6 +129,7 @@ export function parseResume(text, profile) {
   const sections = { top: [] };
   let at = 'top';
   for (const line of String(text || '').replace(/\r/g, '').split('\n')) {
+    if (/^\s*\d{1,2}\s*$/.test(line)) continue;
     const s = sectionOf(line);
     if (s) { at = s; (sections[at] ||= []); continue; }
     (sections[at] ||= []).push(line);
