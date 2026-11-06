@@ -90,7 +90,7 @@ const friends = roster.filter(p => p.id !== 'me').map(({ id }) => {
 const people = [me, ...friends];
 
 // 1. What the page sent. Ids make re-sends harmless; "undo" removes an earlier item.
-const FEEDBACK_ACTIONS = ['reject', 'like', 'undo', 'closed', 'open', 'applied'];
+const FEEDBACK_ACTIONS = ['reject', 'like', 'undo', 'closed', 'open', 'applied', 'followup'];
 function takeFeedback(person, items) {
   const known = new Set(person.state.feedback.map(f => f.id));
   for (const raw of items.slice(0, 500)) {
@@ -332,7 +332,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
           cvs++;
           const out = P.render(job, readJd(job.url), lockOf(job));
           if (out.ok) {
-            u.cv = { id: storeCv(P, job, out), name: P.pdfName(job), variant: out.variant, ats: out.ats, cuts: out.notes, at: today };
+            u.cv = { id: storeCv(P, job, out), name: P.pdfName(job), variant: out.variant, track: out.track, ats: out.ats, cuts: out.notes, at: today };
             u.cvLater = false; u.cvError = undefined; u.cvSkip = undefined;
             R.cvs++;
           } else { u.cvError = out.error; R.cvFailed++; }
@@ -340,10 +340,13 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
         if (Object.keys(u).length) updates[job.url] = u;
       }
     }
-    buildCvs(me);
-    for (const f of ready) {
-      try { buildCvs(f); }
-      catch (err) { f.run.errors.push(`build failed: ${err.name}`); run.errors.push(`a profile's build failed: ${err.name}`); }
+    // A light run only saves choices: no browser was installed for it, and no CV is due.
+    if (process.env.LIGHT !== 'yes') {
+      buildCvs(me);
+      for (const f of ready) {
+        try { buildCvs(f); }
+        catch (err) { f.run.errors.push(`build failed: ${err.name}`); run.errors.push(`a profile's build failed: ${err.name}`); }
+      }
     }
 
     // 4. Is each posting still open? Every job that can reach To apply: pulled jobs you haven't

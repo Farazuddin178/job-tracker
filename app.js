@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
     del(k) { try { localStorage.removeItem(k); } catch { /* storage unavailable */ } },
   };
-  const PASS_KEY = 'jt-pass', TOKEN_KEY = 'jt-gh-token', QUEUE_KEY = 'jt-fb-queue', RUN_KEY = 'jt-run', KNOWN_KEY = 'jt-known', BEST_KEY = 'jt-best-fit';
+  const FEED_CACHE = 'jt-feed-cache', VIEW_KEY = 'jt-view', PASS_KEY = 'jt-pass', TOKEN_KEY = 'jt-gh-token', QUEUE_KEY = 'jt-fb-queue', RUN_KEY = 'jt-run', KNOWN_KEY = 'jt-known', BEST_KEY = 'jt-best-fit';
   const forProfile = (key, id) => (id === 'me' ? key : `${key}-${id}`); // the owner keeps the storage keys from before profiles
   const REPO = 'Farazuddin178/job-tracker', WORKFLOW = 'pull-jobs.yml';
   const S = window.JobScore, A = window.JobAgent;
@@ -17,10 +17,13 @@
   // ── Crypto ──────────────────────────────────────────────────────────
   const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const toB64 = buf => { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
-  const keys = new Map();
+  const keys = new Map(), keyIds = new WeakMap();
+  // "pass" is the typed passphrase, or the non-extractable key a session keeps instead of it.
+  const baseOf = pass => (typeof pass === 'string' ? crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']) : Promise.resolve(pass));
+  const passId = pass => { if (typeof pass === 'string') return pass; if (!keyIds.has(pass)) keyIds.set(pass, `key${keys.size}`); return keyIds.get(pass); };
   function keyFor(pass, salt, iterations) {
-    const id = `${pass}|${salt}|${iterations}`;
-    if (!keys.has(id)) keys.set(id, crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey'])
+    const id = `${passId(pass)}|${salt}|${iterations}`;
+    if (!keys.has(id)) keys.set(id, baseOf(pass)
       .then(base => crypto.subtle.deriveKey({ name: 'PBKDF2', salt: fromB64(salt), iterations, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])));
     return keys.get(id);
   }
@@ -77,16 +80,19 @@
   const needsSetup = () => ID !== 'me' && !(profileSaved && PROFILE.resumeText);
 
   // A tab left open keeps running the old page, so it checks for a new version and reloads itself.
+  // It compares app.js itself: Pages stamps every file on every deploy, so ETag and Last-Modified change on each bot commit.
+  const SELF = document.currentScript?.src || 'app.js';
+  const digest = async r => toB64(await crypto.subtle.digest('SHA-256', await r.arrayBuffer()));
   let pageTag = null;
   async function pageIsOld() {
     try {
-      const tag = (await fetch('app.js', { method: 'HEAD', cache: 'no-store' })).headers.get('etag');
-      if (tag && !pageTag) pageTag = tag;
-      return !!tag && tag !== pageTag;
+      pageTag ||= await digest(await fetch(SELF, { cache: 'force-cache' }));
+      const r = await fetch(`app.js?v=${Date.now()}`, { cache: 'no-store' });
+      return r.ok && (await digest(r)) !== pageTag;
     } catch { return false; }
   }
   async function keepFresh() {
-    if (document.querySelector('dialog[open]') || !(await pageIsOld())) return false;
+    if (document.querySelector('dialog[open]') || openReject || !(await pageIsOld())) return false;
     location.reload();
     return true;
   }
@@ -94,7 +100,7 @@
   const loadQueue = () => { try { QUEUE = JSON.parse(store.get(forProfile(QUEUE_KEY, ID)) || '[]'); } catch { QUEUE = []; } };
   const saveQueue = () => store.set(forProfile(QUEUE_KEY, ID), JSON.stringify(QUEUE));
   const token = () => store.get(TOKEN_KEY);
-  const today = () => new Date().toISOString().slice(0, 10);
+  const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
   const firstName = () => String(PROFILE?.name || '').split(' ')[0];
   const allFeedback = () => [...(FEED.feedback || []), ...QUEUE];
   let ACTIVE = [], LEARNED = S.learn([]);
@@ -104,7 +110,15 @@
     LOCKS = S.companyLocks([...S.appliedFromTracker(DATA?.tracker), ...S.appliedLog(allFeedback())], Number(PROFILE?.cooldownDays) || 60);
   }
   // A profile with no local career-ops run has its tracker built from what it marked applied here.
-  const trackerRows = () => (ID === 'me' ? DATA.tracker : S.appliedLog(allFeedback()).map((a, i) => ({ num: i + 1, date: a.date, company: a.company, role: a.title, score: '—', status: 'Applied', report: null, notes: '' })));
+  const trackerKey = (company, role) => `${norm(company).split(' ')[0]}|${norm(role)}`;
+  function trackerRows() {
+    const log = S.appliedLog(allFeedback());
+    if (ID !== 'me') return log.map((a, i) => ({ num: i + 1, date: a.date, company: a.company, role: a.title, score: '—', status: 'Applied', report: null, notes: '' }));
+    const have = new Set(DATA.tracker.map(r => trackerKey(r.company, r.role)));
+    const top = Math.max(0, ...DATA.tracker.map(r => Number(r.num) || 0));
+    const extra = log.filter(a => !have.has(trackerKey(a.company, a.title))).map((a, i) => ({ num: top + i + 1, date: a.date, company: a.company, role: a.title, score: '—', status: 'Applied', report: null, notes: 'Marked applied on this site' }));
+    return [...DATA.tracker, ...extra];
+  }
   const appliedEntry = r => S.appliedLog(allFeedback()).find(a => a.url === r.url);
   const isApplied = r => !!appliedEntry(r);
   const lockFor = r => { const l = LOCKS[S.normCompany(r.company)]; return l && l.url !== r.url ? l : null; };
@@ -123,6 +137,7 @@
       ...[...new Set(rest.map(e => e.by))].map(by => { const e = rest.find(x => x.by === by); return `<span class="badge team" title="${esc(e.title)}: ask about a referral">${name(e)} ${e.status === 'applied' ? 'applied here' : 'is looking here'}</span>`; })].join('');
   }
   let bestOnly = store.get(BEST_KEY) !== '0';
+  let loading = true, feedTotal = 0, applyTotal = 0, BASE = null; // BASE: the profile as it stood when Settings opened
   // Best fit only: each company shows its top role; the rest wait in a dropdown under it.
   function bestPerCompany(rows, rank) {
     if (!bestOnly) return rows;
@@ -225,33 +240,54 @@
   async function dispatch(mode, profile, tries = 0) {
     if (!token()) { openConnect(); return; }
     clearTimeout(syncTimer);
-    const items = QUEUE.slice(0, 400);
-    const feedback = items.length || profile ? JSON.stringify(await encryptJson(PASS, { items, profile })) : '';
+    // The cap is on the payload, not the count: whatever does not fit goes on the next run.
+    let items = QUEUE.slice(0, 400), feedback = '';
+    for (;;) {
+      feedback = items.length || profile ? JSON.stringify(await encryptJson(PASS, { items, profile })) : '';
+      if (feedback.length <= 60000 || !items.length) break;
+      items = items.slice(0, Math.floor(items.length / 2));
+    }
     if (feedback.length > 60000) throw new Error('That is too much text to send at once. Shorten the resume and save again.');
+    const light = mode === 'feedback' && !profile && !items.some(i => ['like', 'undo'].includes(i.action)) ? 'yes' : '';
+    const known = await gh(`/actions/workflows/${WORKFLOW}/runs?per_page=10`).then(x => x.json()).then(j => (j.workflow_runs || []).map(x => x.id)).catch(() => null);
     const at = Date.now();
-    const r = await gh(`/actions/workflows/${WORKFLOW}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main', inputs: { mode, feedback, who: ID } }) });
+    const r = await gh(`/actions/workflows/${WORKFLOW}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main', inputs: { mode, feedback, who: ID, light } }) });
     if (r.status !== 204) throw new Error(`GitHub did not start the job (${r.status}).`);
-    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at, profile: !!profile, tries }));
+    store.set(forProfile(RUN_KEY, ID), JSON.stringify({ mode, at, profile: !!profile, tries, known }));
     renderPull();
     schedulePoll(4000);
   }
-  function schedulePoll(ms = 10000) { clearTimeout(pollTimer); pollTimer = setTimeout(() => poll().catch(err => setPull(esc(err.message))), ms); }
+  function schedulePoll(ms = 10000) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => poll().catch(err => {
+      setPull(esc(err.message));
+      if (err instanceof TypeError) schedulePoll(8000); // the network dropped: keep following the run
+    }), ms);
+  }
   async function poll() {
     const mark = currentRun();
     if (!mark || !token()) return;
     const r = await gh(`/actions/workflows/${WORKFLOW}/runs?per_page=10`);
+    if (!r.ok) { schedulePoll(20000); return; }
     const runs = (await r.json()).workflow_runs || [];
-    const run = runs.filter(x => new Date(x.created_at) >= mark.at - 60_000).pop();
+    // Ours is the oldest run that was not there when we pressed the button. Device clocks play no part.
+    const fresh = runs.filter(x => (mark.known ? !mark.known.includes(x.id) && x.event !== 'schedule' : new Date(x.created_at) >= mark.at - 60_000));
+    const run = fresh.pop();
     if (!run) {
       if (Date.now() - mark.at > 5 * 60_000) { store.del(forProfile(RUN_KEY, ID)); setPull('GitHub never started the job. Try again in a minute.'); return; }
       schedulePoll(5000); return;
     }
-    if (mark.profile && run.status === 'completed' && runs.some(x => x.status !== 'completed' && new Date(x.created_at) >= mark.at - 60_000)) { schedulePoll(15000); return; }
+    if (mark.profile && run.status === 'completed' && fresh.some(x => x.status !== 'completed')) { schedulePoll(15000); return; }
     mark.url = run.html_url; mark.status = run.status;
     store.set(forProfile(RUN_KEY, ID), JSON.stringify(mark));
     if (run.status !== 'completed') { renderPull(); schedulePoll(mark.mode === 'pull' ? 15000 : 6000); return; }
     store.del(forProfile(RUN_KEY, ID));
-    if (run.conclusion === 'cancelled' && mark.profile && (mark.tries || 0) < 3) { await dispatch(mark.mode, PROFILE, (mark.tries || 0) + 1); return; }
+    if (run.conclusion === 'cancelled' && (mark.tries || 0) < 3) {
+      setPull('GitHub dropped that run because another was queued. Sending it again.');
+      await new Promise(ok => setTimeout(ok, 15000));
+      await dispatch(mark.mode, mark.profile ? PROFILE : undefined, (mark.tries || 0) + 1);
+      return;
+    }
     if (run.conclusion === 'cancelled') { setPull('GitHub cancelled that run because another one was queued. Press the button again.'); return; }
     if (run.conclusion !== 'success') {
       setPull(`The job failed. Most often the <code>TRACKER_PASSPHRASE</code> secret is missing or differs from your passphrase. <a href="${esc(run.html_url)}" target="_blank" rel="noopener noreferrer">See the run ↗</a>`);
@@ -283,34 +319,56 @@
   async function readFeedFile() {
     const text = await repoText(ID === 'me' ? 'feed.enc.js' : `profiles/${ID}/feed.enc.json`);
     if (!text) return null;
-    if (ID !== 'me') return JSON.parse(text);
+    if (ID !== 'me') { store.set(forProfile(FEED_CACHE, ID), text); return JSON.parse(text); }
     const m = text.match(/window\.JOB_FEED\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
     return m ? JSON.parse(m[1]) : null;
   }
+  const cachedFeed = () => { try { return JSON.parse(store.get(forProfile(FEED_CACHE, ID)) || 'null'); } catch { return null; } };
   async function readTeam() {
     const text = TEAM_PASS && await repoText('team.enc.js');
     const m = text && text.match(/window\.JOB_TEAM\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
     if (m) { try { TEAM = await decryptEnc(TEAM_PASS, JSON.parse(m[1])); } catch { /* keep the last copy */ } }
   }
+  // The tracker build (data.enc.js) changes on its own schedule; a tab left open picks it up here.
+  // Every encrypted file costs a key step of about half a second, so an unchanged one (same salt) is not reopened.
+  let dataSalt = null, feedSalt = null, profileText = null;
+  async function refreshData() {
+    if (ID !== 'me') return;
+    const text = await repoText('data.enc.js');
+    const m = text && text.match(/window\.JOB_DATA\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
+    if (!m) return;
+    const enc = JSON.parse(m[1]);
+    if (enc.salt === dataSalt) return;
+    try { DATA = await decryptEnc(PASS, enc); dataSalt = enc.salt; renderEvals(); renderHistory(); } catch { /* keep the last copy */ }
+  }
+  async function refreshProfile() {
+    if (store.get(draftKey()) || $('settings').open) return; // never swap what someone is typing
+    if (await loadProfile()) { profileSaved = true; cloudSig = matchSig(PROFILE); }
+  }
   async function refreshFeed() {
+    await refreshData();
     const enc = await readFeedFile();
     if (enc) await loadFeed(enc);
     await readTeam();
+    await refreshProfile();
+    recompute();
     renderAll();
   }
   async function loadProfile() {
     const text = await repoText(`profiles/${ID}/profile.enc.json`);
     if (!text) return false;
+    if (text === profileText) return true;
     try {
       const saved = await decryptEnc(PASS, JSON.parse(text));
+      profileText = text;
       PROFILE = { ...DATA.profile, ...saved, answers: { ...DATA.profile.answers, ...saved.answers } };
       if (ID === 'me') PROFILE.resumeText = DATA.profile.resumeText; // cv.md stays the owner's resume
       return true;
     } catch { return false; }
   }
   async function loadFeed(enc) {
-    if (!enc) return;
-    try { FEED = { jobs: [], feedback: [], runs: [], ...(await decryptEnc(PASS, enc)) }; }
+    if (!enc || enc.salt === feedSalt) return;
+    try { FEED = { jobs: [], feedback: [], runs: [], ...(await decryptEnc(PASS, enc)) }; feedSalt = enc.salt; }
     catch { return; }
     const sent = new Set((FEED.feedback || []).map(f => f.id));
     const before = QUEUE.length;
@@ -345,9 +403,9 @@
     } else if (needsSetup()) {
       setPull('Add your resume and target roles in Settings. Your jobs and CVs come from them.');
     } else if (!token()) {
-      setPull(`Connect once and this button scans your company boards in the cloud.${queued}`);
+      setPull(QUEUE.length ? `<b>${QUEUE.length} choice${QUEUE.length === 1 ? '' : 's'} saved only on this device.</b> Press Connect so your other devices get ${QUEUE.length === 1 ? 'it' : 'them'}.` : 'Connect once and this button scans your company boards in the cloud.');
     } else {
-      setPull(`Last pull ${ago(FEED.lastPullAt)}${last ? ` · ${last.found} new` : ''} · automatic pulls about 06:00 and 18:00 IST${queued}`);
+      setPull(`Last pull ${ago(FEED.lastPullAt)}${last ? ` · ${last.found} new` : ''} · automatic pulls twice a day; GitHub often starts them hours late${queued}`);
     }
   }
 
@@ -384,6 +442,15 @@
     return (FEED.jobs || []).filter(j => !inApply.has(j.url) && !tracked.has(`${norm(j.company).split(' ')[0]}|${norm(j.title)}`))
       .map(j => ({ ...j, s: S.score(j, LEARNED, PREFS), choice: userChoice(j.url), gone: isGone(j.url) }));
   }
+  function signals(job, fit, hire) {
+    const f = S.freshness(job), level = S.odds(job, Number(fit), Number(hire));
+    return `<span class="badge${level === 'High' ? ' hire' : level === 'Low' ? ' urgent' : ''}" title="A rule of thumb from hireability, fit, posting age and dealbreakers. Not a measured chance.">Interview odds <b>${level}</b></span>
+      <span class="badge${f.band === 'fresh' ? ' hire' : f.band === 'old' ? ' urgent' : ''}">${esc(f.label)}</span>`;
+  }
+  function dealbreakers(job) {
+    const y = job.jd?.years, list = [...(y != null && y >= 2 ? [`asks ${y}+ years`] : []), ...(job.jd?.certs || []).map(c => `wants ${c}`), ...(job.jd?.flags || [])];
+    return list.length ? `<p class="cool" role="note">Check before applying: ${esc(list.join(' · '))}.</p>` : '';
+  }
   function feedCard(j, i) {
     const key = `f${i}`, c = j.choice;
     return `<article class="card${c?.action === 'reject' || (j.s.hidden && !c) ? ' dim' : ''}">
@@ -393,15 +460,17 @@
         <span class="badge">${esc(j.s.archetype)}</span>
         <span class="badge" title="Quick fit from the title (no AI)">Fit <b>${j.s.fit}</b></span>
         <span class="badge hire" title="Quick hireability from the title">Hire <b>${j.s.hire}</b></span>
+        ${signals(j, j.s.fit, j.s.hire)}
         ${c?.action === 'like' ? '<span class="badge hire">★ Interested</span>' : ''}
         ${c?.action === 'reject' ? `<span class="badge rejected">Rejected${c.reasons?.length ? ` · ${esc(c.reasons.join(', '))}` : ''}</span>` : ''}
         ${j.gone ? `<span class="badge rejected" title="${esc(goneWhy(j.url))}">Closed</span>` : liveBadge(j.url)}
         ${teamBadges(j)}
       </div>
       ${cooldownNote(j)}
+      ${dealbreakers(j)}
       <p class="why">${esc(j.s.hiddenBy && !c ? `Hidden: ${j.s.hiddenBy}` : j.s.why.join(' · '))}</p>
       ${jdRow(j)}
-      <p class="meta">${[j.posted && `posted ${j.posted}`, `found ${j.found}`, j.cv && `CV: ${j.cv.variant.replace(/_/g, ' ')} version${j.cv.ats ? ` · ATS ${j.cv.ats}` : ''}`].filter(Boolean).map(esc).join(' · ')}</p>
+      <p class="meta">${[j.posted && `posted ${j.posted}`, `found ${j.found}`, j.cv && `CV: ${(j.cv.track || j.cv.variant).replace(/_/g, ' ')} track${j.cv.ats ? ` · ATS ${j.cv.ats}` : ''}`].filter(Boolean).map(esc).join(' · ')}</p>
       <div class="actions">
         ${isUrl(j.url) ? `<a class="btn ${j.cv ? 'primary' : 'ghost'} small" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>` : ''}
         ${j.cv ? `<button class="btn ghost small" type="button" data-pdf="${esc(j.cv.id)}" data-kind="cvs" data-name="${esc(j.cv.name)}">Download CV ↓</button>`
@@ -419,7 +488,8 @@
   }
   // AI Auto-Apply: the structured view of one job, and the prompt to paste into a browser agent.
   const agentButtons = key => `<button class="btn ghost small" type="button" data-agent="${esc(key)}">AI Auto-Apply</button>
-    <button class="btn ghost small" type="button" data-agent-copy="${esc(key)}">Copy Agent Prompt</button>`;
+    <button class="btn ghost small" type="button" data-agent-copy="${esc(key)}">Copy Agent Prompt</button>
+    <button class="btn ghost small" type="button" data-outreach="${esc(key)}">Outreach draft</button>`;
   // What the job description said (the cloud job reads it through the ATS API).
   function jdRow(j) {
     if (j.jd === undefined) return '';
@@ -446,7 +516,8 @@
     FEED_JOBS = feedJobs();
     const liked = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'like');
     const reviewable = FEED_JOBS.filter(j => !j.gone && !j.choice && !j.s.hidden);
-    const open = bestPerCompany(reviewable, j => j.s.rank + (j.jd?.matched?.length || 0) / 100).sort((a, b) => !!lockFor(a) - !!lockFor(b) || b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
+    feedTotal = reviewable.length;
+    const open = bestPerCompany(reviewable, j => j.s.rank + (j.jd?.matched?.length || 0) / 100).sort((a, b) => !!lockFor(a) - !!lockFor(b) || S.freshness(a).order - S.freshness(b).order || b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
     const hidden = FEED_JOBS.filter(j => !j.gone && !j.choice && j.s.hidden);
     const rejected = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'reject');
     const closed = FEED_JOBS.filter(j => j.gone && j.choice?.action !== 'reject');
@@ -457,7 +528,7 @@
     html += learnedPanel();
     if (liked.length) html += head('02.1', 'Interested', liked.length, 'The next daily run evaluates these first and builds a tailored CV.') + cards(liked);
     html += open.length ? head('02.2', 'To review', open.length, 'Ranked by fit × hireability, read from each job description (from the title when the description could not be read). The best role at each company comes with a tailored one-page CV.') + bestToggle() + cards(open)
-      : `<p class="empty">${FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the next automatic pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
+      : `<p class="empty">${loading ? 'Loading your jobs…' : FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the next automatic pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
     if (hidden.length) html += `<details class="fold"><summary>Hidden by what you taught me (${hidden.length})</summary>${cards(hidden)}</details>`;
     if (rejected.length) html += `<details class="fold"><summary>Rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
     if (closed.length) html += `<details class="fold"><summary>Closed postings (${closed.length})</summary>${cards(closed)}</details>`;
@@ -484,6 +555,7 @@
       <div class="row">
         <span class="badge hire" title="Hireability: your realistic chance of an interview">Hire <b>${esc(r.hire)}</b></span>
         <span class="badge" title="How well the role matches your profile">Fit <b>${esc(r.fit)}</b></span>
+        ${signals(r, r.fit, r.hire)}
         ${r.interested ? '<span class="badge hire">★ Your pick</span>' : ''}
         ${r.pulled && !r.interested ? '<span class="badge">New from pull</span>' : ''}
         ${r.decision ? badge(r.decision) : ''}
@@ -492,6 +564,7 @@
         ${teamBadges(r)}
       </div>
       ${cooldownNote(r)}
+      ${dealbreakers(r)}
       ${r.pay && r.pay !== 'not listed' ? `<div class="row"><span class="badge pay">₹ ${esc(r.pay)}</span></div>` : ''}
       ${r.note ? `<p>${esc(r.note)}</p>` : ''}
       ${r.why ? `<p class="why">${esc(r.why)}</p>` : ''}
@@ -521,7 +594,7 @@
     const local = new Set((DATA.toApply || []).map(r => r.url));
     const tracked = new Set(DATA.tracker.map(r => `${norm(r.company).split(' ')[0]}|${norm(r.role)}`));
     return (FEED.jobs || []).filter(j => !local.has(j.url) && !tracked.has(`${norm(j.company).split(' ')[0]}|${norm(j.title)}`))
-      .map(j => ({ j, s: S.score(j, LEARNED), c: userChoice(j.url) }))
+      .map(j => ({ j, s: S.score(j, LEARNED, PREFS), c: userChoice(j.url) }))
       .filter(({ s, c }) => c?.action === 'like' || (!c && !s.hidden))
       .map(({ j, s, c }) => ({
         company: j.company, title: j.title, url: j.url, location: j.location, jd: j.jd, posted: j.posted, found: j.found, fit: s.fit, hire: s.hire, rank: s.rank, cvVariant: j.cv?.variant,
@@ -535,12 +608,13 @@
     const all = [...(DATA.toApply || []).filter(r => choiceFor(r.url)?.action !== 'reject'), ...pulledForApply()];
     const closedRoles = all.filter(r => isGone(r.url));
     APPLY = all.filter(r => !isGone(r.url))
-      .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || !!lockFor(a) - !!lockFor(b) || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
+      .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || !!lockFor(a) - !!lockFor(b) || S.freshness(a).order - S.freshness(b).order || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
     const rankOf = r => (r.interested ? 100 : 0) + Number(r.hire) * Number(r.fit) + (r.jd?.matched?.length || 0) / 100;
     const open = bestPerCompany(APPLY.filter(r => !isApplied(r)), rankOf);
+    applyTotal = APPLY.filter(r => !isApplied(r)).length;
     const marked = APPLY.filter(isApplied);
     $('apply-count').textContent = open.length || '';
-    if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + '<p class="empty">Nothing to apply to yet. The next daily run adds roles with a tailored CV.</p>'; return; }
+    if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + `<p class="empty">${loading ? 'Loading your jobs…' : 'Nothing to apply to yet. The next daily run adds roles with a tailored CV.'}</p>`; return; }
     const cards = list => `<div class="grid">${list.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`;
     let html = head('03', 'To apply', open.length, 'Evaluated roles plus every pulled job that passes your filters. The best role at each company has a one-page CV tailored to it. Read the CV before you send it.');
     const lastCheck = FEED.lastCheckAt;
@@ -548,10 +622,15 @@
       <p class="mono muted">${lastCheck ? `Last checked ${esc(ago(lastCheck))}.` : 'Not checked yet.'} Each pull also rechecks. Closed postings leave this list; found one yourself? Press “Posting closed” on its card.</p></div>`;
     const picks = open.filter(r => r.interested);
     if (picks.length) html += head('03.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
+    // Fresh postings first, whatever their score: being early is the one thing that cannot be fixed later.
+    const band = r => S.freshness(r).band;
+    const early = open.filter(r => !r.interested && band(r) === 'fresh'), older = open.filter(r => !r.interested && band(r) === 'old');
+    if (early.length) html += head('03.1', 'Apply today', early.length, 'Posted in the last 48 hours. Apply while the pile is small.') + cards(early);
     GROUPS.forEach(([name, hint, test], g) => {
-      const rows = open.filter(r => !r.interested && test(r));
-      if (rows.length) html += head(`03.${g + 1}`, name, rows.length, hint) + cards(rows);
+      const rows = open.filter(r => !r.interested && !['fresh', 'old'].includes(band(r)) && test(r));
+      if (rows.length) html += head(`03.${g + 2}`, name, rows.length, hint) + cards(rows);
     });
+    if (older.length) html += `<details class="fold"><summary>Older than 7 days (${older.length})</summary><p class="muted">Apply only if the fit is strong, ideally with a referral or a direct message.</p>${cards(older)}</details>`;
     if (marked.length) html += `<details class="fold"><summary>Applied (${marked.length})</summary><p class="muted">Each one starts the cooldown for its company. Your teammate sees them on the Team tab.</p>${cards(marked)}</details>`;
     if (closedRoles.length) html += `<details class="fold"><summary>Closed postings (${closedRoles.length})</summary><p class="muted">Removed because the posting is gone or no longer takes applications. If one is still open, press “It's still open”.</p><div class="grid">${closedRoles.map(closedCard).join('')}</div></details>`;
     $('tab-apply').innerHTML = html;
@@ -563,10 +642,11 @@
     const count = s => rows.filter(r => r.status === s).length;
     const waiting = rows.filter(r => r.status === 'Applied' && /waiting/i.test(r.notes)).length;
     const due = DATA.followups.entries.length;
-    const toApply = Number($('apply-count').textContent) || 0;
-    const fresh = Number($('feed-count').textContent) || 0;
+    const shownApply = Number($('apply-count').textContent) || 0, shownNew = Number($('feed-count').textContent) || 0;
+    const toApply = applyTotal, fresh = feedTotal;
+    const sub = (shown, all, word) => (bestOnly && shown !== all ? `${shown} best fit` : word);
     const tiles = [
-      ['New jobs', fresh, 'to review'], ['To apply', toApply, 'CV ready'], ['Applied', count('Applied'), `${waiting} waiting`],
+      ['New jobs', loading ? '…' : fresh, loading ? 'loading' : sub(shownNew, fresh, 'to review')], ['To apply', loading ? '…' : toApply, loading ? 'loading' : sub(shownApply, toApply, 'to apply')], ['Applied', count('Applied'), `${waiting} waiting`],
       ['Interview', count('Interview') + count('Assessment'), 'active'], ['Offers', count('Offer') + count('Hired'), ''],
       ['Rejected', count('Rejected'), ''], ['Follow-ups', due, 'due now', due > 0],
     ];
@@ -607,21 +687,20 @@
     const runLine = last ? `Last pull ${ago(last.at)}: ${last.found} new, ${last.cvs || 0} CVs built${last.errors?.length ? `, ${last.errors.length} boards unreachable` : ''}. Automatic pulls about 06:00 and 18:00 IST.` : 'No pull yet.';
     html += head(interviews.length ? '01.1' : '01', 'Latest pulls', recentJobs.length, runLine);
     html += recentJobs.length ? `<div class="grid">${recentJobs.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`
-      : '<p class="empty">No new jobs in the last 3 days passed your filters. Your boards post a few a week; each one lands here and on To apply.</p>';
+      : loading ? '<p class="empty">Loading your jobs…</p>' : '<p class="empty">No new jobs in the last 3 days passed your filters. Your boards post a few a week; each one lands here and on To apply.</p>';
     if (pulls.length) html += `<details class="fold"><summary>Pull history (${pulls.length})</summary><div class="table-wrap"><table><thead><tr><th>When</th><th>New</th><th>CVs</th><th>Filtered</th><th>Boards unreachable</th></tr></thead><tbody>${
       [...pulls].reverse().map(r => `<tr><td>${esc(new Date(r.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${r.found}</td><td>${r.cvs ?? '—'}</td><td>${r.hidden ?? '—'}</td><td>${r.errors?.length || 0}</td></tr>`).join('')}</tbody></table></div></details>`;
     if (ID === 'me') html += dailyHtml(DATA.dailies[0], interviews.length ? '01.2' : '01.1');
     $('tab-today').innerHTML = html;
   }
   function renderFollowups() {
-    const today = new Date().toISOString().slice(0, 10);
     const rank = e => (e.status === 'interview' || e.status === 'assessment' ? 0 : 1);
     const items = [...DATA.followups.entries].sort((a, b) => rank(a) - rank(b) || a.daysSinceApplication - b.daysSinceApplication);
-    let html = head('04', 'Follow-ups', items.length, 'Tick one once you have followed up today. Ticks stay on this device.');
+    let html = head('04', 'Follow-ups', items.length, 'Tick one once you have followed up today. Ticks reach your other devices.');
     if (!items.length) { $('tab-followups').innerHTML = html + '<p class="empty">Nothing due.</p>'; return; }
     html += `<div class="grid">${items.map(e => {
-      const key = `jt-fu-${today}-${e.num}`, done = store.get(key) === '1';
-      return `<label class="card fu${done ? ' done' : ''}"><input type="checkbox" data-key="${key}" ${done ? 'checked' : ''}>
+      const done = choiceFor(`followup:${e.num}`)?.date === today();
+      return `<label class="card fu${done ? ' done' : ''}"><input type="checkbox" data-fu="${esc(e.num)}" ${done ? 'checked' : ''}>
         <div><p class="co"><span>${esc(e.company)}</span><span>#${e.num}</span></p><h3>${esc(e.role)}</h3>
         <div class="row">${badge(e.status)}<span class="badge${e.urgency === 'overdue' ? ' urgent' : ''}">${esc(e.urgency)}</span></div>
         <p class="meta">applied ${e.daysSinceApplication} days ago · due ${esc(e.nextFollowupDate)} · ${e.followupCount} sent</p></div></label>`;
@@ -683,7 +762,7 @@
   function renderAll() {
     if (!DATA) return;
     renderIdentity(); renderFeed(); renderToApply(); renderKpis(); renderPull(); renderToday(); renderTeam();
-    if (ID !== 'me') renderTracker();
+    renderTracker(); renderFollowups();
     // "Updated" = the newest of the local build and the last cloud pull.
     const stamps = [DATA.builtAt, FEED.updatedAt].filter(Boolean).sort();
     $('built').textContent = stamps.length ? `Updated ${new Date(stamps.pop()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not pulled yet';
@@ -705,16 +784,26 @@
     $('lock').hidden = true; $('app').hidden = false;
     recompute();
     renderFollowups(); renderTracker(); renderEvals(); renderHistory(); renderAll();
-    if (window.JOB_TEAM && team) { try { TEAM = await decryptEnc(team, window.JOB_TEAM); } catch { /* the refresh below tries again */ } }
-    const saved = await loadProfile();
+    dataSalt = id === 'me' ? window.JOB_DATA?.salt : null;
+    const first = id === 'me' ? window.JOB_FEED : cachedFeed();
+    const [saved] = await Promise.all([
+      loadProfile(), loadFeed(first),
+      window.JOB_TEAM && team ? decryptEnc(team, window.JOB_TEAM).then(t => { TEAM = t; }).catch(() => {}) : null, // the refresh below tries again
+    ]);
     profileSaved = saved;
     cloudSig = saved ? matchSig(PROFILE) : '';
-    await restoreDraft();
-    if (id === 'me') await loadFeed(window.JOB_FEED);
+    const unsaved = await restoreDraft();
+    if (first) { loading = false; recompute(); renderAll(); } // what we have now; the refresh brings anything newer
+    restoreView();
     await refreshFeed().catch(() => {});
+    loading = false;
     recompute(); renderAll(); migrateApplied();
     rememberName();
-    if (needsSetup()) openSettings(true);
+    let resume = false;
+    try { resume = !!sessionStorage.getItem(SAVE_AFTER_RELOAD); sessionStorage.removeItem(SAVE_AFTER_RELOAD); } catch { /* storage unavailable */ }
+    if (unsaved && resume && token()) saveProfile(PROFILE).catch(err => setPull(esc(err.message)));
+    else if (unsaved) { openSettings(false); $('s-msg').textContent = 'Not saved yet: these changes are only on this device. Press Save.'; }
+    else if (needsSetup()) openSettings(true);
     pageIsOld();
     if (!token()) return;
     if (currentRun()) poll().catch(err => setPull(esc(err.message)));
@@ -722,12 +811,23 @@
   }
 
   // ── Settings ────────────────────────────────────────────────────────
+  const SAVE_AFTER_RELOAD = 'jt-save-after-reload';
+  // Only what was edited here replaces the saved profile, so a change from another device survives.
+  function mergeProfile(base, mine, latest) {
+    const changed = (a, b) => JSON.stringify(a) !== JSON.stringify(b);
+    const out = { ...latest, answers: { ...latest.answers } };
+    for (const k of Object.keys(mine)) if (k !== 'answers' && changed(mine[k], base?.[k])) out[k] = mine[k];
+    for (const k of Object.keys(mine.answers || {})) if (changed(mine.answers[k], base?.answers?.[k])) out.answers[k] = mine.answers[k];
+    out.updatedAt = mine.updatedAt;
+    return out;
+  }
   const LISTS = { 's-places': 'jobLocations', 's-roles': 'targetRoles', 's-skills': 'skills', 's-keywords': 'keywords', 's-avoid': 'avoid', 's-languages': 'languages' };
   const FIELDS = { 's-name': 'name', 's-email': 'email', 's-phone': 'phone', 's-linkedin': 'linkedin', 's-github': 'github', 's-location': 'location', 's-minlpa': 'minLpa', 's-maxyears': 'maxYears', 's-cooldown': 'cooldownDays', 's-resume': 'resumeText' };
   const ANSWERS = { 's-notice': 'notice', 's-ctc': 'currentCtc', 's-expected': 'expectedCtc', 's-why': 'whyLeaving', 's-total': 'totalExperience', 's-auth': 'workAuth' };
   const splitList = v => v.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
   function openSettings(first) {
     const p = PROFILE, a = p.answers || {};
+    BASE = JSON.parse(JSON.stringify(p));
     for (const [el, k] of Object.entries(FIELDS)) $(el).value = p[k] ?? '';
     for (const [el, k] of Object.entries(LISTS)) $(el).value = (p[k] || []).join(', ');
     for (const [el, k] of Object.entries(ANSWERS)) $(el).value = a[k] ?? '';
@@ -743,10 +843,15 @@
     $('s-title').textContent = first ? 'SET UP YOUR PROFILE' : 'YOUR PROFILE';
     $('s-msg').textContent = '';
     $('settings').showModal();
+    formSnap = settingsSnap();
   }
+  let formSnap = '';
+  const settingsSnap = () => JSON.stringify({ ...readSettings(), updatedAt: 0 });
+  const keepTyped = () => { if ($('settings').open && settingsSnap() !== formSnap) saveDraft(readSettings()).catch(() => {}); };
   // What the resume text gives the CV builder, shown before saving instead of a pull later.
   // The same parser the cloud runs, so what this says is what the CVs get.
   let parser = null, checkTimer = null;
+  const measuredLine = c => (c.bullets ? ` ${c.measured || 0} of ${c.bullets} bullets show a measured result; add real figures where you have them.` : '');
   async function checkResume() {
     if (ID === 'me') { $('s-check').textContent = ''; return; }
     const text = $('s-resume').value.trim();
@@ -755,7 +860,7 @@
       parser ||= await import('./cloud/resume.mjs');
       const c = parser.parseResume(text, { name: $('s-name').value, email: $('s-email').value }).check;
       const read = `Read ${c.jobs} job${c.jobs === 1 ? '' : 's'}, ${c.bullets} bullets, ${c.projects} project${c.projects === 1 ? '' : 's'}, ${c.skills} skill line${c.skills === 1 ? '' : 's'}.`;
-      $('s-check').innerHTML = `<b>Resume check:</b> ${read}${c.problems.length ? ` Fix these: ${c.problems.map(esc).join(' ')}` : ' Ready for tailored CVs.'}`;
+      $('s-check').innerHTML = `<b>Resume check:</b> ${read}${c.problems.length ? ` Fix these: ${c.problems.map(esc).join(' ')}` : ' Ready for tailored CVs.'}${measuredLine(c)}`;
     } catch { /* the cloud repeats this check */ }
   }
   // What was typed survives Connect, a reload and a new version of the page. Encrypted like everything else.
@@ -894,6 +999,19 @@
     $('agent').showModal();
     if (job.cvId) cvBlobUrl(job).then(url => { agentUrl = url; link.href = url; link.download = job.cvName; link.hidden = false; }).catch(() => {});
   }
+  function outreachCount() {
+    const n = $('outreach-text').value.length;
+    $('outreach-count').textContent = `${n} characters${n > 300 ? ' · over the 300-character LinkedIn invite limit, so send it as a message or email' : n > 200 ? ' · fits a Premium LinkedIn invite (300), not a free one (200)' : ''}`;
+  }
+  function openOutreach(key) {
+    const job = agentJob(key), o = A.outreach({ profile: PROFILE, job, applied: S.appliedLog(allFeedback()).some(a => a.url === job.url) });
+    $('outreach-title').textContent = `${job.title} · ${job.company}`;
+    $('outreach-text').value = o.text;
+    outreachCount();
+    $('outreach-search').href = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${job.company} recruiter`)}`;
+    $('outreach').showModal();
+  }
+  $('outreach-text').addEventListener('input', outreachCount);
   // The block holds phone and pay, so it exists only while the dialog is open.
   $('agent').addEventListener('close', () => { $('ai-agent-payload').innerHTML = ''; $('agent-prompt').value = ''; $('agent-resume').value = ''; });
   async function copyPrompt(key, btn) {
@@ -943,7 +1061,7 @@
     try {
       if (!window.JOB_DATA) throw new Error('data.enc.js is missing. Run node build.mjs.');
       const who = await openWith(pass);
-      if ($('remember').checked) { store.set(forProfile(PASS_KEY, who), pass); rememberName(); }
+      if ($('remember').checked && await startSession(who, pass)) rememberName(true);
     } catch (err) {
       $('lock-error').textContent = err.message.includes('data.enc.js') ? err.message : 'Wrong passphrase.';
     }
@@ -961,27 +1079,68 @@
   }
   // Profiles remembered on this device, for the lock screen.
   const knownProfiles = () => { try { return JSON.parse(store.get(KNOWN_KEY) || '[]'); } catch { return []; } };
-  function rememberName() {
-    if (!store.get(forProfile(PASS_KEY, ID))) return;
+  function rememberName(force) {
+    if (!force && !knownProfiles().some(k => k.id === ID)) return;
     store.set(KNOWN_KEY, JSON.stringify([...knownProfiles().filter(k => k.id !== ID), { id: ID, name: PROFILE?.name || ID }]));
   }
-  $('lock-btn').addEventListener('click', () => {
+  // Staying signed in: the browser keeps a key it can use but cannot show, for 7 days. The passphrase is not stored.
+  const SESSION_MS = 7 * 86_400_000;
+  const sessionDb = fn => new Promise((ok, no) => {
+    const open = indexedDB.open('jt-session', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('s');
+    open.onerror = () => no(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('s', 'readwrite'), q = fn(tx.objectStore('s'));
+      tx.oncomplete = () => { db.close(); ok(q.result); };
+      tx.onerror = tx.onabort = () => { db.close(); no(tx.error); };
+    };
+  });
+  const getSession = id => sessionDb(s => s.get(id)).catch(() => null);
+  const dropSession = id => sessionDb(s => s.delete(id)).catch(() => null);
+  async function startSession(id, pass, team = TEAM_PASS) {
+    const base = await baseOf(pass), teamKey = team ? await baseOf(team) : null;
+    return sessionDb(s => s.put({ base, team: teamKey, expires: Date.now() + SESSION_MS }, id)).then(() => true).catch(() => false);
+  }
+  async function resume(id) {
+    const s = await getSession(id);
+    if (!s || s.expires < Date.now()) { await dropSession(id); return false; }
+    await show(id, id === 'me' ? await decryptEnc(s.base, window.JOB_DATA) : emptyData(), s.base, s.team);
+    return true;
+  }
+  $('lock-btn').addEventListener('click', async () => {
     store.del(forProfile(PASS_KEY, ID));
+    await dropSession(ID);
     store.set(KNOWN_KEY, JSON.stringify(knownProfiles().filter(k => k.id !== ID)));
     location.reload();
   });
+  // Where you were: the tab and the scroll position come back after a reload or a phone closing the tab.
+  const viewKey = () => forProfile(VIEW_KEY, ID);
+  const saveView = patch => { let v = {}; try { v = JSON.parse(store.get(viewKey()) || '{}'); } catch { /* start over */ } store.set(viewKey(), JSON.stringify({ ...v, ...patch })); };
+  function restoreView() {
+    let v = null;
+    try { v = JSON.parse(store.get(viewKey()) || 'null'); } catch { return; }
+    const btn = v?.tab && document.querySelector(`.tabs [data-tab="${v.tab}"]`);
+    if (!btn || btn.hidden) return;
+    selectTab(v.tab, true);
+    if (v.y) requestAnimationFrame(() => scrollTo(0, v.y));
+  }
+  addEventListener('pagehide', () => { if (PASS) saveView({ y: Math.round(scrollY) }); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && PASS) { saveView({ y: Math.round(scrollY) }); keepTyped(); } });
   $('switch-btn').addEventListener('click', () => { try { sessionStorage.setItem('jt-switch', '1'); } catch { /* storage unavailable */ } location.reload(); });
   let lastLook = Date.now();
   async function lookAgain() {
-    if (document.hidden || !PASS || Date.now() - lastLook < 120_000) return;
+    if (document.hidden || !PASS || Date.now() - lastLook < 30_000) return;
     lastLook = Date.now();
     if (await keepFresh()) return;
-    if (!currentRun()) refreshFeed().catch(() => {});
+    if (currentRun()) schedulePoll(500); // a sleeping phone can lose the timer that was following a run
+    refreshFeed().catch(() => {});
   }
   document.addEventListener('visibilitychange', lookAgain);
   addEventListener('focus', lookAgain);
   setInterval(lookAgain, 300_000);
-  $('settings-btn').addEventListener('click', () => openSettings(false));
+  for (const el of [...$('settings').querySelectorAll('button[value=close]')]) el.addEventListener('click', clearDraft);
+  $('settings').addEventListener('cancel', clearDraft);
+  $('settings-btn').addEventListener('click', async () => { await refreshProfile().catch(() => {}); recompute(); openSettings(false); });
   $('s-resume-file').addEventListener('change', async e => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1001,7 +1160,10 @@
     const next = readSettings();
     if (ID !== 'me' && (next.resumeText.length < 50 || !next.targetRoles.length)) { $('s-msg').textContent = 'Add your resume and at least one target role: jobs are matched to them.'; return; }
     await saveDraft(next);
-    if (await pageIsOld()) { location.reload(); return; } // the new page puts this draft back
+    if (await pageIsOld()) { // a real new version: the new page puts this draft back and finishes the save
+      try { sessionStorage.setItem(SAVE_AFTER_RELOAD, '1'); } catch { /* storage unavailable */ }
+      location.reload(); return;
+    }
     if (!token()) {
       pendingProfile = next; PROFILE = next; // nothing typed is lost; it saves itself after Connect
       $('settings').close(); openConnect();
@@ -1009,18 +1171,21 @@
       return;
     }
     $('s-msg').textContent = 'Saving…';
-    try { await saveProfile(next); }
-    catch (err) { $('s-msg').textContent = err.message; }
+    try {
+      await loadProfile(); // the copy other devices may have changed
+      await saveProfile(profileSaved ? mergeProfile(BASE, next, PROFILE) : next);
+    } catch (err) { $('s-msg').textContent = err.message; }
   });
   $('pull-btn').addEventListener('click', () => {
     if (needsSetup()) { openSettings(true); return; }
     dispatch('pull').catch(err => setPull(esc(err.message)));
   });
-  function selectTab(tab) {
+  function selectTab(tab, restoring) {
+    if (!restoring) saveView({ tab, y: 0 });
     document.querySelectorAll('.tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     document.querySelectorAll('.panel').forEach(p => { p.hidden = p.id !== `tab-${tab}`; });
     $('app').classList.toggle('compact', tab !== 'today');
-    if (scrollY > 0) scrollTo({ top: 0, behavior: 'smooth' });
+    if (!restoring && scrollY > 0) scrollTo({ top: 0, behavior: 'smooth' });
   }
   document.addEventListener('click', e => {
     const tab = e.target.closest('[data-tab]');
@@ -1030,6 +1195,8 @@
     if (e.target.closest('[data-best-only]')) { bestOnly = !bestOnly; store.set(BEST_KEY, bestOnly ? '1' : '0'); renderFeed(); renderToApply(); renderKpis(); return; }
     const tv = e.target.closest('[data-team-view]');
     if (tv) { teamView = tv.dataset.teamView; renderTeam(); return; }
+    const reach = e.target.closest('[data-outreach]');
+    if (reach) { openOutreach(reach.dataset.outreach); return; }
     const ag = e.target.closest('[data-agent]');
     if (ag) { openAgent(ag.dataset.agent).catch(err => toast(esc(err.message))); return; }
     const agc = e.target.closest('[data-agent-copy]');
@@ -1116,26 +1283,45 @@
       if (e.target.checked) markApplied(r); else { const f = appliedEntry(r); if (f) undo(f); }
       return;
     }
-    const key = e.target.dataset?.key;
-    if (!key) return;
-    if (e.target.checked) store.set(key, '1'); else store.del(key);
-    e.target.closest('.fu').classList.toggle('done', e.target.checked);
+    const fu = e.target.dataset?.fu;
+    if (!fu) return;
+    const url = `followup:${fu}`, row = DATA.followups.entries.find(x => String(x.num) === fu);
+    if (e.target.checked) addFeedback({ action: 'followup', url, company: row?.company, title: row?.role, date: today() });
+    else { const f = choiceFor(url); if (f) undo(f); }
   });
   addEventListener('scroll', () => {
     const h = document.documentElement;
     $('progress').style.width = `${Math.min(100, (h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight)) * 100)}%`;
   }, { passive: true });
 
-  // Auto-unlock when the passphrase was remembered on this device.
-  function startup() {
-    const known = knownProfiles();
-    if (store.get(PASS_KEY) && !known.some(k => k.id === 'me')) known.unshift({ id: 'me', name: 'Saved profile' });
+  // Passphrases saved in the clear by older versions become sessions, and the plain copy goes.
+  async function moveOldPassphrases(known) {
+    for (const entry of window.JOB_PROFILES?.list || []) {
+      const old = store.get(forProfile(PASS_KEY, entry.id));
+      if (!old) continue;
+      try {
+        const key = await decryptEnc(old, entry.key);
+        if (await startSession(entry.id, old, key.team) && !known.some(k => k.id === entry.id)) known.push({ id: entry.id, name: entry.id === 'me' ? 'Saved profile' : entry.id });
+      } catch { /* a wrong old passphrase is simply dropped */ }
+      store.del(forProfile(PASS_KEY, entry.id));
+    }
+    store.set(KNOWN_KEY, JSON.stringify(known));
+  }
+  // Open straight away when this device has a live session.
+  async function startup() {
+    let known = knownProfiles();
+    await moveOldPassphrases(known);
+    const live = [];
+    for (const k of known) { const s = await getSession(k.id); if (s && s.expires > Date.now()) live.push(k); else if (s) await dropSession(k.id); }
+    known = live;
+    store.set(KNOWN_KEY, JSON.stringify(known));
     let switching = false;
     try { switching = !!sessionStorage.getItem('jt-switch'); sessionStorage.removeItem('jt-switch'); } catch { /* storage unavailable */ }
-    if (known.length === 1 && !switching) {
-      const saved = store.get(forProfile(PASS_KEY, known[0].id));
-      if (saved && window.JOB_DATA) openWith(saved).catch(() => store.del(forProfile(PASS_KEY, known[0].id)));
-      return;
+    if (known.length === 1 && !switching && window.JOB_DATA) {
+      $('lock-error').textContent = 'Opening…';
+      try { if (await resume(known[0].id)) { $('lock-error').textContent = ''; return; } }
+      catch { await dropSession(known[0].id); store.set(KNOWN_KEY, '[]'); known = []; }
+      $('lock-error').textContent = '';
     }
     $('lock-known').innerHTML = known.map(k => `<button class="btn ghost small" type="button" data-known="${esc(k.id)}">Continue as ${esc(k.name)}</button>`).join('');
     $('lock-known').hidden = !known.length;
@@ -1143,8 +1329,8 @@
   $('lock-known').addEventListener('click', e => {
     const b = e.target.closest('[data-known]');
     if (!b) return;
-    const saved = store.get(forProfile(PASS_KEY, b.dataset.known));
-    if (saved) openWith(saved).catch(() => { $('lock-error').textContent = 'That saved passphrase no longer works. Type it again.'; });
+    resume(b.dataset.known).then(ok => { if (!ok) $('lock-error').textContent = 'That sign-in has ended. Type your passphrase.'; })
+      .catch(() => { dropSession(b.dataset.known); $('lock-error').textContent = 'That sign-in no longer works. Type your passphrase.'; });
   });
   startup();
 })();

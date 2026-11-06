@@ -151,7 +151,7 @@ export function parseResume(text, profile) {
   else if (dated > experience.length) problems.push(`Could read only ${experience.length} of ${dated} jobs under Experience. Put each job on its own line as "Title, Company, Jan 2024 – Present".`);
   if (!payload.skills.length) problems.push('No Skills section found.');
   if (!payload.education.length) problems.push('No Education section found.');
-  const check = { jobs: experience.length, bullets: experience.reduce((n, j) => n + j.bullets.length, 0), projects: payload.projects.length, skills: payload.skills.length, problems };
+  const check = { jobs: experience.length, bullets: experience.reduce((n, j) => n + j.bullets.length, 0), measured: experience.flatMap(j => j.bullets).filter(isMeasured).length, projects: payload.projects.length, skills: payload.skills.length, problems };
   return { payload, md: toMarkdown(payload), check };
 }
 
@@ -172,13 +172,22 @@ function toMarkdown(p) {
   return `${out.join('\n')}\n`;
 }
 
-/** The same facts, most relevant to this job first. Job order stays chronological. */
-export function tailor(payload, jdText, topTerms) {
+// A bullet with a result you could check: a figure with a unit, not just any digit.
+const MEASURED = /\d[\d,.]*\s*(%|\+|k\b|m\b|x\b|lakh|crore|users?|customers?|clients?|records?|cases?|alerts?|hours?|hrs?|days?|tickets?|transactions?|accounts?|requests?|people|members?)/i;
+export const isMeasured = b => MEASURED.test(b);
+
+/**
+ * The same facts, with light touches only: at most `lift` bullets (those that speak most to this job) move
+ * to the top of their job, and every other bullet keeps its place. Skills and projects are reordered. Job
+ * order stays chronological. Nothing is reworded, so the resume stays recognisably the same document.
+ */
+export function tailor(payload, jdText, topTerms, lift = 3) {
   const jd = new Set(topTerms(jdText || '', 60));
   const hits = s => topTerms(s).filter(w => jd.has(w)).length;
   const byHits = (list, text) => list.map((x, i) => [x, hits(text(x)), i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([x]) => x);
   const p = structuredClone(payload);
-  for (const j of p.experience) j.bullets = byHits(j.bullets, b => b);
+  const lifted = new Set(p.experience.flatMap(j => j.bullets).map((b, i) => [b, hits(b), i]).filter(x => x[1] > 0 && x[0].length >= 40).sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, lift).map(x => x[0]));
+  for (const j of p.experience) j.bullets = [...byHits(j.bullets.filter(b => lifted.has(b)), b => b), ...j.bullets.filter(b => !lifted.has(b))];
   p.projects = byHits(p.projects, x => `${x.name} ${x.description}`);
   for (const s of p.skills) s.items = byHits(s.items.split(/\s*,\s*/), x => x).join(', ');
   p.skills = byHits(p.skills, s => s.items);

@@ -24,6 +24,28 @@
     return `I'm applying for the ${line(job.title)} role because it draws on ${joined}, which my background covers.`;
   }
 
+  // The resume line that speaks most to this job, in the resume's own words.
+  function proofLine(profile, job) {
+    const words = [...(job.jd?.matched || []), ...String(job.title || '').toLowerCase().split(/[^a-z0-9+#]+/).filter(w => w.length > 3)];
+    const stop = String(profile.resumeText || '').search(/^#*\s*\**\s*(projects?|education|skills|certifications?)\b/im);
+    const head = stop > 0 ? String(profile.resumeText).slice(0, stop) : String(profile.resumeText || '');
+    const lines = head.split('\n').map(l => l.match(/^\s*[-*•▪·]\s*(.+)$/)?.[1]).filter(l => l && l.length >= 30 && !/\bshifts?\b/i.test(l)).map(l => line(l).replace(/\*\*/g, '').replace(/[.;]+$/, ''));
+    let best = '', top = -1;
+    for (const l of lines) {
+      const low = l.toLowerCase(), n = words.filter(w => low.includes(w)).length + (/\d/.test(l) ? 0.5 : 0);
+      if (n > top) { top = n; best = l; }
+    }
+    return best;
+  }
+  // Three sentences for a recruiter or hiring manager. A draft: the person adds the name and sends it.
+  function outreach({ profile, job, applied }) {
+    const proof = proofLine(profile, job);
+    const skills = (job.jd?.matched || []).filter(s => provenText(profile.resumeText).includes(s)).slice(0, 3);
+    const middle = proof ? `My most relevant work: ${proof[0].toLowerCase()}${proof.slice(1)}.` : skills.length ? `My background covers ${skills.join(', ')}.` : '';
+    const text = [`Hi [Name], ${applied ? "I've applied for" : "I'm interested in"} the ${line(job.title)} role at ${line(job.company)}.`, middle, 'Could we talk for 10 minutes, or could you point me to the right person?'].filter(Boolean).join(' ');
+    return { text, grounded: !!middle };
+  }
+
   function payload({ profile, job, resumeText, lock }) {
     const a = profile.answers || {};
     const answers = {
@@ -82,5 +104,5 @@
     ].join('\n');
   }
 
-  root.JobAgent = { payload, prompt };
+  root.JobAgent = { outreach, payload, prompt };
 })(typeof window !== 'undefined' ? window : globalThis);

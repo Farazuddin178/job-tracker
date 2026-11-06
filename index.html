@@ -29,7 +29,7 @@
       <form id="lock-form" class="lock-form" autocomplete="off">
         <label for="pass" class="sr-only">Passphrase</label>
         <input id="pass" type="password" placeholder="Passphrase" required autofocus>
-        <label class="check"><input id="remember" type="checkbox"> Remember on this device</label>
+        <label class="check"><input id="remember" type="checkbox" checked> Stay signed in for 7 days on this device</label>
         <button type="submit" class="btn primary">Unlock <span aria-hidden="true">↘</span></button>
         <p id="lock-error" class="error" role="alert"></p>
       </form>
@@ -185,6 +185,22 @@
       <div class="actions">
         <button class="btn primary" type="button" data-copy-from="agent-prompt">Copy Agent Prompt</button>
         <a id="agent-cv" class="btn ghost" hidden>Download CV ↓</a>
+        <button class="btn ghost" value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="outreach" class="dialog wide" aria-labelledby="outreach-title">
+    <form method="dialog" class="dialog-body">
+      <p class="eyebrow"><span class="dot"></span> Outreach draft</p>
+      <h2 class="display small" id="outreach-title"></h2>
+      <p>A draft for a recruiter or hiring manager, using lines from your own resume. Add their name, read it, and send it yourself. Nothing is sent from here.</p>
+      <label for="outreach-text" class="mono">Message</label>
+      <textarea id="outreach-text" rows="6"></textarea>
+      <p id="outreach-count" class="muted mono"></p>
+      <div class="actions">
+        <button class="btn primary" type="button" data-copy-from="outreach-text">Copy message</button>
+        <a id="outreach-search" class="btn ghost" target="_blank" rel="noopener noreferrer">Find a recruiter ↗</a>
         <button class="btn ghost" value="close">Close</button>
       </div>
     </form>

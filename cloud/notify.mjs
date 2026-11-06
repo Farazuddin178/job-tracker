@@ -17,7 +17,7 @@ import { profilePass, parseProfiles } from './profiles.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active, groupByCompany, prefsFrom } = globalThis.JobScore;
+const { learn, score, active, groupByCompany, prefsFrom, freshness } = globalThis.JobScore;
 const SITE = 'https://farazuddin178.github.io/job-tracker/';
 const REPO = process.env.GITHUB_REPOSITORY || 'Farazuddin178/job-tracker';
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
@@ -42,7 +42,7 @@ function digest({ id, delta, state, prefs, evaluated = [], friend = false }) {
   const newUrls = new Set((delta.jobs || []).map(j => j.url));
   const fresh = state.jobs.filter(j => newUrls.has(j.url)).map(scored);
   // Best fit per company, as on the site: the other roles are one click away there.
-  const ready = groupByCompany(fresh.filter(j => !j.s.hidden && !rejected.has(j.url)), j => j.s.rank).map(g => g.best).sort((a, b) => b.s.rank - a.s.rank);
+  const ready = groupByCompany(fresh.filter(j => !j.s.hidden && !rejected.has(j.url)), j => j.s.rank).map(g => g.best).sort((a, b) => freshness(a).order - freshness(b).order || b.s.rank - a.s.rank);
   const filtered = fresh.filter(j => j.s.hidden);
   const builtFor = Object.entries(delta.updates || {}).filter(([, u]) => u.cv).map(([url]) => url);
   const live = state.liveness || {};

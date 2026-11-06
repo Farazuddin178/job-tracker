@@ -4,6 +4,15 @@ A private dashboard for a job search shared by two people, hosted on GitHub Page
 
 All data is encrypted (AES-256-GCM, key from a passphrase via PBKDF2-SHA256, 310,000 iterations) before it is committed. The repo holds only `data.enc.js`; without the passphrase the page shows a password box and nothing else.
 
+## How jobs are ranked and CVs are built
+
+- **Freshness:** To apply opens with "Apply today" (posted in the last 48 hours). Roles older than 7 days fold into their own section. A posting with no date reads "post date unknown", never old.
+- **Interview odds:** Low, Medium or High, from hireability, fit, posting age and dealbreakers. It is a rule of thumb, not a measured chance.
+- **Dealbreakers:** each card lists what to check first: years asked, required certifications, shifts, daily office work, relocation, immediate joining and bonds.
+- **Three tracks:** Fraud / Risk / T&S, SOC / IAM, and Junior SWE / Data. Each has one master for work bullets and projects. A job changes the headline, summary and skills, and moves at most two bullets. Nothing is reworded.
+- **Outreach draft:** a three-sentence message on each card, using a line from your own resume. You add the name and send it yourself; the site sends nothing.
+- **Staying signed in:** the browser keeps a key it can use but cannot show for 7 days, not the passphrase. Lock ends it. Untick the box on a shared computer.
+
 ## Daily update
 
 ```

@@ -177,6 +177,14 @@
     out.certs = ['cams', 'cfe', 'cissp', 'ceh', 'security+', 'cisa', 'cism', 'oscp'].filter(c => new RegExp(`\\b${escRe(c)}(?![a-z])`).test(t) && new RegExp(`(required|must have|mandatory)[^.]{0,60}\\b${escRe(c)}|\\b${escRe(c)}[^.]{0,40}(required|mandatory)`).test(t)).map(c => c.toUpperCase());
     out.matched = P.skills.filter(s => wordRe(s).test(t));
     out.calls = /\b(inbound|outbound) calls?\b|\bphone calls?\b/.test(t);
+    // Worth a look before applying. Shown on the card; none of these hide a job by themselves.
+    out.flags = [];
+    if (/\b(night|graveyard|us|uk|emea) shifts?\b/.test(t)) out.flags.push('night or overseas shift');
+    else if (/\b(rotational|rotating) shifts?\b|\b24 ?[x*/] ?7\b/.test(t)) out.flags.push('rotational shifts');
+    if (/\b(work from office|wfo|on-?site only|100% on-?site|5 days (a week )?(from|in|at) (the )?office)\b/.test(t)) out.flags.push('office every day');
+    if (/\brelocat(e|ion)\b[^.]{0,40}\b(required|must|mandatory)\b|\b(must|required to|willing(ness)? to) relocate\b/.test(t)) out.flags.push('relocation required');
+    if (/\bimmediate joiners?\b|\bjoin(ing)? (immediately|within (15|30) days)\b/.test(t)) out.flags.push('immediate joiner');
+    if (/\b(service agreement|employment bond|training bond|service bond)\b/.test(t)) out.flags.push('employment bond');
     if (P.resume.size) {
       const jdTerms = topTerms(t, 40);
       out.overlap = jdTerms.length ? Math.round(jdTerms.filter(w => P.resume.has(w)).length / jdTerms.length * 100) : null;
@@ -256,11 +264,30 @@
     return [...latest.values()];
   }
 
+  // How old a posting is. Only a real date counts: no date means "unknown", never "old".
+  function freshness(job, now = Date.now()) {
+    const t = Date.parse(job?.posted || '');
+    if (Number.isNaN(t)) return { age: null, band: 'unknown', order: 1, label: 'post date unknown' };
+    const age = Math.max(0, Math.floor((now - t) / 86_400_000));
+    const when = age === 0 ? 'today' : age === 1 ? 'yesterday' : `${age} days ago`;
+    if (age <= 2) return { age, band: 'fresh', order: 0, label: `posted ${when}` };
+    if (age <= 7) return { age, band: 'ok', order: 1, label: `posted ${when}` };
+    return { age, band: 'old', order: 2, label: `posted ${age} days ago` };
+  }
+  // A rule of thumb from what is known about the job and you. It stays Low / Medium / High, never a
+  // percentage: a percentage needs real outcomes to learn from, and there are none yet.
+  const HARD_FLAGS = ['relocation required', 'employment bond'];
+  function odds(job, fit, hire, now) {
+    const f = freshness(job, now), hard = (job?.jd?.flags || []).filter(x => HARD_FLAGS.includes(x)).length;
+    const points = (hire >= 4 ? 2 : hire >= 3 ? 1 : 0) + (fit >= 4 ? 2 : fit >= 3 ? 1 : 0) + (f.band === 'fresh' ? 1 : f.band === 'old' ? -1 : 0) - hard;
+    return hire < 2 ? 'Low' : points >= 4 ? 'High' : points >= 2 ? 'Medium' : 'Low';
+  }
+
   const REASONS = [
     ['field', 'Not my kind of work'], ['senior', 'Too senior / too much experience'], ['company', 'Not this company'],
     ['location', 'Wrong location'], ['pay', 'Pay too low'], ['type', 'Sales / voice / BPO'],
     ['dup', 'Already applied / duplicate'], ['other', 'Other'],
   ];
 
-  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, appliedLog, companyLocks, REASONS, ARCH };
+  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, appliedLog, companyLocks, freshness, odds, REASONS, ARCH };
 })(typeof window !== 'undefined' ? window : globalThis);

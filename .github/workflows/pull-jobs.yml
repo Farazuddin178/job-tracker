@@ -20,6 +20,10 @@ on:
         description: "Profile id the feedback belongs to (leave empty)"
         required: false
         default: ""
+      light:
+        description: "yes = saving choices only, no CVs, so skip the browser install (leave empty)"
+        required: false
+        default: ""
   schedule:
     # Odd minutes: GitHub delays runs queued on the hour the most.
     - cron: "17 0 * * *"
@@ -60,13 +64,32 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install the scanner and the PDF renderer
+      - name: Restore the cached tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: cv-tools-${{ steps.ref.outputs.sha }}
+          restore-keys: cv-tools-
+
+      - name: Install the scanner
         working-directory: .career-ops
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: |
-          npm install --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error  # upstream does not commit a lockfile
-          npx playwright install --with-deps chromium > /dev/null
+        run: npm install --prefer-offline --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error  # upstream does not commit a lockfile
+
+      - name: Install the PDF browser
+        if: inputs.light != 'yes'
+        working-directory: .career-ops
+        run: npx playwright install chromium > /dev/null
+
+      # apt sometimes stalls for 10 minutes. The runner image already has most of these libraries,
+      # so a slow day moves on instead of holding every run; a CV that then fails is retried next pull.
+      - name: Install the browser's system libraries
+        if: inputs.light != 'yes'
+        working-directory: .career-ops
+        run: timeout 150 npx playwright install-deps chromium > /dev/null || echo "Skipped after 150 s; using the libraries on the runner."
 
       - name: Pull jobs
         env:
@@ -74,6 +97,7 @@ jobs:
           CAREER_OPS_DIR: ${{ github.workspace }}/.career-ops
           FEEDBACK: ${{ inputs.feedback }}
           WHO: ${{ inputs.who }}
+          LIGHT: ${{ inputs.light }}
           DELTA_FILE: ${{ runner.temp }}/delta.json
         run: node cloud/pull.mjs
 

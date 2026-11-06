@@ -6,7 +6,7 @@
 //   node sync.mjs --dry-run  # show what would change, write nothing in career-ops
 //
 // Run by publish.mjs before every build, and first thing in the daily routine.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -100,6 +100,29 @@ for (const a of appliedLog(state.feedback)) {
   const r = spawnSync(process.execPath, args, { cwd: opsDir, encoding: 'utf8' });
   log.push(r.status === 0 ? `tracker: report ${a.report} → Applied` : `tracker: report ${a.report} left as is (${(r.stderr || r.stdout).trim().split('\n')[0]})`);
   applied.add(key);
+}
+
+// 2c. "I applied" on a cloud-found job has no report to update. It gets a tracker row through the canonical
+// merge, so the Tracker tab and the follow-up cadence see it. A company + role already tracked is updated, not doubled.
+const cell = v => String(v ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+const newRows = [];
+for (const a of appliedLog(state.feedback)) {
+  const key = `applied:${a.id}`;
+  if (a.report || applied.has(key)) continue;
+  if (dry) { log.push(`would add tracker row: ${a.company} | ${a.title}`); continue; }
+  const claim = spawnSync(process.execPath, ['reserve-report-num.mjs'], { cwd: opsDir, encoding: 'utf8' });
+  const num = claim.stdout.trim();
+  if (claim.status !== 0 || !/^\d+$/.test(num)) { log.push(`tracker: no number for ${a.company} (${(claim.stderr || '').trim().split('\n')[0]})`); continue; }
+  const slug = cell(a.company).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'company';
+  const row = [num, a.date, cell(a.company), cell(a.title), 'Applied', 'N/A', '❌', '—', 'marked applied on the tracker site', cell(a.url)].join('\t');
+  mkdirSync(join(root, 'batch', 'tracker-additions'), { recursive: true });
+  writeFileSync(join(root, 'batch', 'tracker-additions', `${num}-${slug}.tsv`), `num\tdate\tcompany\trole\tstatus\tscore\tpdf\treport\tnotes\turl\n${row}\n`);
+  newRows.push(num); applied.add(key);
+}
+if (newRows.length) {
+  const m = spawnSync(process.execPath, ['merge-tracker.mjs'], { cwd: opsDir, encoding: 'utf8' });
+  log.push(m.status === 0 ? `tracker: ${newRows.length} application(s) from the site merged` : `tracker: merge failed (${(m.stderr || m.stdout).trim().split('\n')[0]})`);
+  for (const n of newRows) spawnSync(process.execPath, ['reserve-report-num.mjs', '--release', n], { cwd: opsDir, encoding: 'utf8' });
 }
 
 // 3. Jobs the cloud found count as seen locally, so the local scan doesn't list them again.
