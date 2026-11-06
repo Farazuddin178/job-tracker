@@ -32,6 +32,7 @@ const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, group
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
 const mode = (process.env.MODE || 'pull').trim();
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10); // IST
+const CV_VERSION = 2; // raise when the master CV changes: recent jobs you have not applied to get a fresh CV
 const KEEP_DAYS = 45, MAX_JOBS = 400, MAX_CVS = Number(process.env.MAX_CVS || 30), MAX_JDS = 80;
 const feedFile = join(here, 'feed.enc.js');
 
@@ -309,7 +310,9 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const pending = mode === 'pull' ? [...P.delta.jobs, ...P.state.jobs.filter(j => j.found >= recent && !j.cv && (!j.cvSkip || j.cvSkip === NO_RESUME || R.settings))] : [];
       // A CV built before you applied to that company, in a different version from the one you sent.
       const contradicting = mode === 'pull' && P.lockedVariant ? P.state.jobs.filter(j => j.cv && lockOf(j) && j.cv.variant !== P.lockedVariant(lockOf(j))) : [];
-      const todo = [...P.state.jobs.filter(j => liked.has(j.url) && !j.cv), ...pending, ...contradicting]
+      // CVs from an older master, unless that company already has an application (it keeps the version it saw).
+      const outdated = mode === 'pull' ? P.state.jobs.filter(j => j.cv && (j.cv.v || 0) < CV_VERSION && j.found >= recent && !lockOf(j)) : [];
+      const todo = [...P.state.jobs.filter(j => liked.has(j.url) && !j.cv), ...pending, ...contradicting, ...outdated]
         .filter((j, i, a) => !rejected.has(j.url) && a.findIndex(x => x.url === j.url) === i);
       let jds = 0, cvs = 0;
       for (const job of todo) {
@@ -332,7 +335,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
           cvs++;
           const out = P.render(job, readJd(job.url), lockOf(job));
           if (out.ok) {
-            u.cv = { id: storeCv(P, job, out), name: P.pdfName(job), variant: out.variant, track: out.track, ats: out.ats, cuts: out.notes, at: today };
+            u.cv = { id: storeCv(P, job, out), name: P.pdfName(job), v: CV_VERSION, variant: out.variant, track: out.track, ats: out.ats, cuts: out.notes, at: today };
             u.cvLater = false; u.cvError = undefined; u.cvSkip = undefined;
             R.cvs++;
           } else { u.cvError = out.error; R.cvFailed++; }
