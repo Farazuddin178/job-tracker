@@ -55,7 +55,24 @@ function payloadFrom(kit, variantId, exact = false) {
 }
 
 // Ways to win back space when the render spills onto page 2, one per retry.
+// A sentence-level cut keeps only words the person wrote: the first sentence(s) up to `max` characters.
+const firstSentences = (s, max) => {
+  const parts = String(s).split(/(?<=[.;])\s+(?=[A-Z(])/);
+  let out = parts[0];
+  for (const x of parts.slice(1)) { if ((out + ' ' + x).length > max) break; out += ' ' + x; }
+  return out.length >= 40 && out.length < String(s).length ? out : null;
+};
 const SHRINK = [
+  // A resume pasted by a profile (no kit variants): long paragraphs and extra lines come off first.
+  (p, kit) => {
+    if (kit?.variants) return;
+    let n = 0;
+    for (const j of p.experience || []) j.bullets = j.bullets.map(b => { const c = b.length > 240 && firstSentences(b, 220); if (c) n++; return c || b; });
+    if (n) return `shortened ${n} long bullet${n === 1 ? '' : 's'} to the first sentence`;
+  },
+  (p, kit) => { if (!kit?.variants && p.summary && p.summary.length > 320) { const c = firstSentences(p.summary, 300); if (c) { p.summary = c; return 'shortened the summary'; } } },
+  (p, kit) => { if (!kit?.variants && p.education?.length > 2) { p.education = p.education.slice(0, 2); return 'kept the first two education lines'; } },
+  (p, kit) => { if (!kit?.variants && p.certifications?.length > 2) { p.certifications = p.certifications.slice(0, 2); return 'kept the first two certifications'; } },
   (p) => { if (p.projects.length > 2) { p.projects = p.projects.slice(0, 2); return 'dropped 3rd project'; } },
   (p, kit) => { const i = p.projects.findIndex(x => x.description === kit.projects.LEGAL_LONG?.description); if (i >= 0) { p.projects[i] = structuredClone(kit.projects.LEGAL_SHORT); return 'short legal-project line'; } },
   // On a security CV the hands-on lab is the strongest proof, so a project goes first.
@@ -110,7 +127,7 @@ export function renderCv({ opsDir, env, kit, job, jdText, workDir, override, var
   const json = join(workDir, `cv-${slug}.json`), html = join(workDir, `cv-${slug}.html`), pdf = join(workDir, `cv-${slug}.pdf`);
   const notes = [];
   let error = null, ats = null;
-  for (let attempt = 0; attempt <= 10; attempt++) {
+  for (let attempt = 0; attempt <= 16; attempt++) {
     writeFileSync(json, JSON.stringify(payload, null, 2));
     error = null;
     for (const [label, args] of [
