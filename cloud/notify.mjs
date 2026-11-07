@@ -17,7 +17,7 @@ import { profilePass, parseProfiles } from './profiles.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active, groupByCompany, prefsFrom, freshness } = globalThis.JobScore;
+const { learn, score, active, groupByCompany, prefsFrom, freshness, appliedLog, appliedCompanies, normCompany } = globalThis.JobScore;
 const SITE = 'https://farazuddin178.github.io/job-tracker/';
 const REPO = process.env.GITHUB_REPOSITORY || 'Farazuddin178/job-tracker';
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
@@ -33,16 +33,20 @@ const date = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
 const startedBy = (process.env.WHO || 'me').trim() || 'me';
 
 /** What one person's mail says, or null when this run gives them nothing worth a mail. */
-function digest({ id, delta, state, prefs, evaluated = [], friend = false }) {
+function digest({ id, delta, state, prefs, evaluated = [], applied = [], friend = false }) {
   const run = delta.run || {};
   const fb = active(state.feedback);
   const learned = learn(fb);
   const rejected = new Set(fb.filter(f => f.action === 'reject').map(f => f.url));
   const scored = j => ({ ...j, s: score(j, learned, prefs) });
   const newUrls = new Set((delta.jobs || []).map(j => j.url));
-  const fresh = state.jobs.filter(j => newUrls.has(j.url)).map(scored);
+  // Roles at a company you already applied to stay off the mail: you asked for new companies.
+  const ever = appliedCompanies([...applied, ...appliedLog(state.feedback)]);
+  const repeat = j => { const l = ever[normCompany(j.company)]; return !!l && l.url !== j.url; };
+  const seenBefore = new Set(state.jobs.filter(j => !newUrls.has(j.url)).map(j => normCompany(j.company)));
+  const fresh = state.jobs.filter(j => newUrls.has(j.url) && !repeat(j)).map(scored).map(j => ({ ...j, newCo: !seenBefore.has(normCompany(j.company)) }));
   // Best fit per company, as on the site: the other roles are one click away there.
-  const ready = groupByCompany(fresh.filter(j => !j.s.hidden && !rejected.has(j.url)), j => j.s.rank).map(g => g.best).sort((a, b) => freshness(a).order - freshness(b).order || b.s.rank - a.s.rank);
+  const ready = groupByCompany(fresh.filter(j => !j.s.hidden && !rejected.has(j.url)), j => j.s.rank).map(g => g.best).sort((a, b) => b.newCo - a.newCo || freshness(a).order - freshness(b).order || b.s.rank - a.s.rank);
   const filtered = fresh.filter(j => j.s.hidden);
   const builtFor = Object.entries(delta.updates || {}).filter(([, u]) => u.cv).map(([url]) => url);
   const live = state.liveness || {};
@@ -63,7 +67,7 @@ function digest({ id, delta, state, prefs, evaluated = [], friend = false }) {
     : `No new jobs this time · ${toApply} in your To apply list · ${date}`;
   const row = j => `<tr><td style="padding:10px 0;border-bottom:1px solid #ddd">
     <div style="font:600 15px Arial">${esc(j.title)}</div>
-    <div style="font:13px Arial;color:#555">${esc(j.company)} · ${esc(j.location || '')}${j.posted ? ` · posted ${esc(j.posted)}` : ''}</div>
+    <div style="font:13px Arial;color:#555">${j.newCo ? '<b style="color:#0a7d3c">New company</b> · ' : ''}${esc(j.company)} · ${esc(j.location || '')}${j.posted ? ` · posted ${esc(j.posted)}` : ''}</div>
     <div style="font:13px Arial;margin-top:4px">Fit <b>${j.s.fit}</b> · Hireability <b>${j.s.hire}</b> · ${esc(j.s.why.join(' · '))}</div>
     ${j.jd ? `<div style="font:12px Arial;color:#555">${j.jd.years == null ? 'years not stated' : `asks ${j.jd.years}+ yrs`} · ${j.jd.payLpa == null ? 'pay not listed' : `pay up to ₹${j.jd.payLpa.toFixed(1)} LPA`}</div>` : ''}
     <div style="font:13px Arial;margin-top:6px"><a href="${esc(j.url)}">Open posting</a> · ${j.cv ? `<a href="${SITE}">Download the tailored CV on your tracker</a>` : j.cvSkip === 'no CV source yet' ? 'Add your resume in Settings to get a CV' : 'CV comes with the next pull'}</div></td></tr>`;
@@ -134,7 +138,7 @@ const password = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
 // The owner.
 const ownerProfile = existsSync(join(here, 'profiles/me/profile.enc.json')) ? decryptJson(pass, JSON.parse(readFileSync(join(here, 'profiles/me/profile.enc.json'), 'utf8'))) : null;
 const ownerPrefs = prefsFrom({ ...(ownerProfile || {}), resumeText: input.files['cv.md'] || '' }, 'me');
-const mine = digest({ id: 'me', delta, state, prefs: ownerPrefs, evaluated: input.files['data/to-apply.json'] ? JSON.parse(input.files['data/to-apply.json']) : [] });
+const mine = digest({ id: 'me', delta, state, prefs: ownerPrefs, evaluated: input.files['data/to-apply.json'] ? JSON.parse(input.files['data/to-apply.json']) : [], applied: input.files['data/applied.json'] ? JSON.parse(input.files['data/applied.json']) : [] });
 if (!mine) console.log('Nothing new: no notification.');
 else {
   let sent = false;

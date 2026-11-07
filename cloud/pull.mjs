@@ -28,7 +28,7 @@ import { parseResume, tailor } from './resume.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedLog, companyLocks } = globalThis.JobScore;
+const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedLog, companyLocks, appliedCompanies, firstSeen } = globalThis.JobScore;
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
 const mode = (process.env.MODE || 'pull').trim();
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10); // IST
@@ -305,6 +305,10 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const closed = new Set([...fbNow.filter(f => f.action === 'closed').map(f => f.url), ...Object.entries(P.state.liveness || {}).filter(([, l]) => l.status === 'expired').map(([u]) => u)]);
       const locks = companyLocks([...P.extraApplied, ...appliedLog(feedback)], P.cooldownDays);
       const lockOf = job => locks[normCompany(job.company)];
+      const ever = appliedCompanies([...P.extraApplied, ...appliedLog(feedback)]);
+      const repeat = job => { const l = ever[normCompany(job.company)]; return !!l && l.url !== job.url && !liked.has(job.url); };
+      const first = firstSeen([...P.state.jobs, ...P.delta.jobs]);
+      const newFirst = (a, b) => (first[normCompany(b.company)] || '').localeCompare(first[normCompany(a.company)] || '');
       const recent = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
       const all = [...P.state.jobs, ...P.delta.jobs];
       const pending = mode === 'pull' ? [...P.delta.jobs, ...P.state.jobs.filter(j => j.found >= recent && !j.cv && (!j.cvSkip || j.cvSkip === NO_RESUME || R.settings))] : [];
@@ -312,7 +316,9 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const contradicting = mode === 'pull' && P.lockedVariant ? P.state.jobs.filter(j => j.cv && lockOf(j) && j.cv.variant !== P.lockedVariant(lockOf(j))) : [];
       // CVs from an older master, unless that company already has an application (it keeps the version it saw).
       const outdated = mode === 'pull' ? P.state.jobs.filter(j => j.cv && (j.cv.v || 0) < CV_VERSION && j.found >= recent && !lockOf(j)) : [];
-      const todo = [...P.state.jobs.filter(j => liked.has(j.url) && !j.cv), ...pending, ...contradicting, ...outdated]
+      // Newest companies first, and none you already applied to (those leave your lists), so the
+      // job-description and CV limits are spent where you can still apply.
+      const todo = [...P.state.jobs.filter(j => liked.has(j.url) && !j.cv), ...[...pending, ...outdated].filter(j => !repeat(j)).sort(newFirst), ...contradicting]
         .filter((j, i, a) => !rejected.has(j.url) && a.findIndex(x => x.url === j.url) === i);
       let jds = 0, cvs = 0;
       for (const job of todo) {
@@ -324,7 +330,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       }
       const view = j => ({ ...j, ...updates[j.url] });
       const rankOf = j => score(j, learned, P.prefs).rank + (j.jd?.matched?.length || 0) / 100;
-      const open = all.filter(j => !rejected.has(j.url) && !closed.has(j.url)).map(view).filter(j => !score(j, learned, P.prefs).hidden);
+      const open = all.filter(j => !rejected.has(j.url) && !closed.has(j.url) && !repeat(j)).map(view).filter(j => !score(j, learned, P.prefs).hidden);
       const best = new Set(groupByCompany(open, rankOf).map(g => g.best.url));
       for (const job of todo) {
         const s = score(view(job), learned, P.prefs), u = updates[job.url] || {};

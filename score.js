@@ -256,6 +256,19 @@
     return locks;
   }
 
+  // Every company with an application, ever (not just inside the cooldown): key → latest application.
+  // You asked for new companies each time, so these leave the lists for good.
+  const appliedCompanies = applied => companyLocks(applied, 36500);
+  // Company key → the first date any of its jobs was pulled.
+  function firstSeen(jobs) {
+    const first = {};
+    for (const j of jobs || []) {
+      const k = normCompany(j.company), f = j.found || '';
+      if (k && f && (!first[k] || f < first[k])) first[k] = f;
+    }
+    return first;
+  }
+
   // Feedback as it stands: the latest choice per job, minus anything undone.
   function active(list) {
     const undone = new Set((list || []).filter(f => f.action === 'undo').map(f => f.target));
@@ -289,5 +302,5 @@
     ['dup', 'Already applied / duplicate'], ['other', 'Other'],
   ];
 
-  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, appliedLog, companyLocks, freshness, odds, REASONS, ARCH };
+  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, appliedLog, companyLocks, appliedCompanies, firstSeen, freshness, odds, REASONS, ARCH };
 })(typeof window !== 'undefined' ? window : globalThis);

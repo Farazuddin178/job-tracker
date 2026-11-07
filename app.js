@@ -73,7 +73,7 @@
   // ── State ───────────────────────────────────────────────────────────
   let DATA = null, PASS = null, ID = 'me', TEAM_PASS = null;
   let FEED = { jobs: [], feedback: [], runs: [] };
-  let PROFILE = null, PREFS = S.prefsFrom(null), TEAM = null, LOCKS = {};
+  let PROFILE = null, PREFS = S.prefsFrom(null), TEAM = null, LOCKS = {}, EVER = {}, FIRST = {};
   let profileSaved = false, pendingProfile = null; // pendingProfile: settings waiting for Connect
   let cloudSig = ''; // what the last saved profile asked for, to tell when a save needs a pull
   const matchSig = p => JSON.stringify([p?.resumeText, p?.targetRoles, p?.keywords, p?.location, p?.jobLocations, p?.minLpa, p?.maxYears]);
@@ -107,7 +107,10 @@
   function recompute() {
     ACTIVE = S.active(allFeedback()); LEARNED = S.learn(ACTIVE);
     PREFS = S.prefsFrom(PROFILE, ID);
-    LOCKS = S.companyLocks([...S.appliedFromTracker(DATA?.tracker), ...S.appliedLog(allFeedback())], Number(PROFILE?.cooldownDays) || 60);
+    const applied = [...S.appliedFromTracker(DATA?.tracker), ...S.appliedLog(allFeedback())];
+    LOCKS = S.companyLocks(applied, Number(PROFILE?.cooldownDays) || 60);
+    EVER = S.appliedCompanies(applied);
+    FIRST = S.firstSeen(FEED.jobs);
   }
   // A profile with no local career-ops run has its tracker built from what it marked applied here.
   const trackerKey = (company, role) => `${norm(company).split(' ')[0]}|${norm(role)}`;
@@ -122,6 +125,12 @@
   const appliedEntry = r => S.appliedLog(allFeedback()).find(a => a.url === r.url);
   const isApplied = r => !!appliedEntry(r);
   const lockFor = r => { const l = LOCKS[S.normCompany(r.company)]; return l && l.url !== r.url ? l : null; };
+  // You applied somewhere else at this company: its roles fold away so the lists show new companies.
+  const appliedCo = r => { const l = EVER[S.normCompany(r.company)]; return l && l.url !== r.url ? l : null; };
+  // A company whose first job reached you in the last 3 days.
+  const newCo = r => { const f = FIRST[S.normCompany(r.company)]; return !!f && f >= new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10) && !appliedCo(r); };
+  const newBadge = r => (newCo(r) ? '<span class="badge hire" title="First seen in the last 3 days, and you have not applied there">New company</span>' : '');
+  const repeatFold = (list, cards) => (list.length ? `<details class="fold"><summary>At companies you already applied to (${list.length})</summary><p class="muted">Kept out of your lists so each pull brings new companies. Open one only if you really want a second role there.</p>${cards(list)}</details>` : '');
   function cooldownNote(r) {
     const l = lockFor(r);
     return l ? `<p class="cool" role="note">Already applied to ${esc(l.title)} at ${esc(r.company)} on ${esc(l.date)}. Cooldown until ${esc(l.until)}${ID === 'me' ? '; any CV here keeps the version you sent them' : ''}.</p>` : '';
@@ -457,6 +466,7 @@
       <p class="co"><span>${esc(j.company)}</span><span>${esc(j.location || '')}</span></p>
       <h3>${esc(j.title)}</h3>
       <div class="row">
+        ${newBadge(j)}
         <span class="badge">${esc(j.s.archetype)}</span>
         <span class="badge" title="Quick fit from the title (no AI)">Fit <b>${j.s.fit}</b></span>
         <span class="badge hire" title="Quick hireability from the title">Hire <b>${j.s.hire}</b></span>
@@ -515,9 +525,10 @@
   function renderFeed() {
     FEED_JOBS = feedJobs();
     const liked = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'like');
-    const reviewable = FEED_JOBS.filter(j => !j.gone && !j.choice && !j.s.hidden);
+    const reviewable = FEED_JOBS.filter(j => !j.gone && !j.choice && !j.s.hidden && !appliedCo(j));
+    const repeats = FEED_JOBS.filter(j => !j.gone && !j.choice && !j.s.hidden && appliedCo(j));
     feedTotal = reviewable.length;
-    const open = bestPerCompany(reviewable, j => j.s.rank + (j.jd?.matched?.length || 0) / 100).sort((a, b) => !!lockFor(a) - !!lockFor(b) || S.freshness(a).order - S.freshness(b).order || b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
+    const open = bestPerCompany(reviewable, j => j.s.rank + (j.jd?.matched?.length || 0) / 100).sort((a, b) => newCo(b) - newCo(a) || S.freshness(a).order - S.freshness(b).order || b.s.rank - a.s.rank || (b.posted || '').localeCompare(a.posted || ''));
     const hidden = FEED_JOBS.filter(j => !j.gone && !j.choice && j.s.hidden);
     const rejected = FEED_JOBS.filter(j => !j.gone && j.choice?.action === 'reject');
     const closed = FEED_JOBS.filter(j => j.gone && j.choice?.action !== 'reject');
@@ -529,6 +540,7 @@
     if (liked.length) html += head('02.1', 'Interested', liked.length, 'The next daily run evaluates these first and builds a tailored CV.') + cards(liked);
     html += open.length ? head('02.2', 'To review', open.length, 'Ranked by fit × hireability, read from each job description (from the title when the description could not be read). The best role at each company comes with a tailored one-page CV.') + bestToggle() + cards(open)
       : `<p class="empty">${loading ? 'Loading your jobs…' : FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the next automatic pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
+    html += repeatFold(repeats, cards);
     if (hidden.length) html += `<details class="fold"><summary>Hidden by what you taught me (${hidden.length})</summary>${cards(hidden)}</details>`;
     if (rejected.length) html += `<details class="fold"><summary>Rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
     if (closed.length) html += `<details class="fold"><summary>Closed postings (${closed.length})</summary>${cards(closed)}</details>`;
@@ -553,6 +565,7 @@
       <p class="co"><span>${esc(r.company)}</span><span>${esc(r.report ? `report ${r.report}` : r.pulled ? 'quick score' : '')}</span></p>
       <h3>${esc(r.title)}</h3>
       <div class="row">
+        ${newBadge(r)}
         <span class="badge hire" title="Hireability: your realistic chance of an interview">Hire <b>${esc(r.hire)}</b></span>
         <span class="badge" title="How well the role matches your profile">Fit <b>${esc(r.fit)}</b></span>
         ${signals(r, r.fit, r.hire)}
@@ -608,10 +621,13 @@
     const all = [...(DATA.toApply || []).filter(r => choiceFor(r.url)?.action !== 'reject'), ...pulledForApply()];
     const closedRoles = all.filter(r => isGone(r.url));
     APPLY = all.filter(r => !isGone(r.url))
-      .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || !!lockFor(a) - !!lockFor(b) || S.freshness(a).order - S.freshness(b).order || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
+      .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || newCo(b) - newCo(a) || S.freshness(a).order - S.freshness(b).order || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
     const rankOf = r => (r.interested ? 100 : 0) + Number(r.hire) * Number(r.fit) + (r.jd?.matched?.length || 0) / 100;
-    const open = bestPerCompany(APPLY.filter(r => !isApplied(r)), rankOf);
-    applyTotal = APPLY.filter(r => !isApplied(r)).length;
+    // Your own picks stay even at a company you applied to; everything else there folds away.
+    const fresh = r => !isApplied(r) && (r.interested || !appliedCo(r));
+    const open = bestPerCompany(APPLY.filter(fresh), rankOf);
+    const repeats = APPLY.filter(r => !isApplied(r) && !fresh(r));
+    applyTotal = APPLY.filter(fresh).length;
     const marked = APPLY.filter(isApplied);
     $('apply-count').textContent = open.length || '';
     if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + `<p class="empty">${loading ? 'Loading your jobs…' : 'Nothing to apply to yet. The next daily run adds roles with a tailored CV.'}</p>`; return; }
@@ -631,6 +647,7 @@
       if (rows.length) html += head(`03.${g + 2}`, name, rows.length, hint) + cards(rows);
     });
     if (older.length) html += `<details class="fold"><summary>Older than 7 days (${older.length})</summary><p class="muted">Apply only if the fit is strong, ideally with a referral or a direct message.</p>${cards(older)}</details>`;
+    html += repeatFold(repeats, cards);
     if (marked.length) html += `<details class="fold"><summary>Applied (${marked.length})</summary><p class="muted">Each one starts the cooldown for its company. Your teammate sees them on the Team tab.</p>${cards(marked)}</details>`;
     if (closedRoles.length) html += `<details class="fold"><summary>Closed postings (${closedRoles.length})</summary><p class="muted">Removed because the posting is gone or no longer takes applications. If one is still open, press “It's still open”.</p><div class="grid">${closedRoles.map(closedCard).join('')}</div></details>`;
     $('tab-apply').innerHTML = html;
@@ -652,7 +669,7 @@
     ];
     $('kpis').innerHTML = tiles.map(([l, n, sub, alert], i) =>
       `<div class="kpi${alert ? ' alert' : ''}"><div class="i">${pad(i + 1)} —</div><div class="n">${n}</div><div class="l">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ''}</div></div>`).join('');
-    const best = toApply ? APPLY.filter(r => r.hire >= 3.5 && !isApplied(r)).length : 0;
+    const best = toApply ? APPLY.filter(r => r.hire >= 3.5 && !isApplied(r) && !appliedCo(r)).length : 0;
     $('hero-line').textContent = best ? `${best} best chance${best === 1 ? '' : 's'} waiting.` : fresh ? `${fresh} new job${fresh === 1 ? '' : 's'} to review.` : 'Apply where you can win.';
   }
   function tableHtml(t) {
@@ -683,7 +700,7 @@
     const pulls = (FEED.runs || []).filter(r => r.mode === 'pull');
     const last = pulls[pulls.length - 1];
     const since = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
-    const recentJobs = APPLY.filter(r => r.pulled && (r.found || '') >= since);
+    const recentJobs = APPLY.filter(r => r.pulled && (r.found || '') >= since && (r.interested || !appliedCo(r))).sort((a, b) => newCo(b) - newCo(a));
     const runLine = last ? `Last pull ${ago(last.at)}: ${last.found} new, ${last.cvs || 0} CVs built${last.errors?.length ? `, ${last.errors.length} boards unreachable` : ''}. Automatic pulls about 06:00 and 18:00 IST.` : 'No pull yet.';
     html += head(interviews.length ? '01.1' : '01', 'Latest pulls', recentJobs.length, runLine);
     html += recentJobs.length ? `<div class="grid">${recentJobs.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`
