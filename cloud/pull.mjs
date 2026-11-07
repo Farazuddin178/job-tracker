@@ -140,6 +140,26 @@ const pickKeys = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).fil
 
 // The title_filter.positive block of portals.yml, as text so its 160 KB of comments stay untouched.
 const POSITIVE = /(title_filter:\s*\n(?:\s*#.*\n)*\s*positive:\s*\n(?:\s*#.*\n)*)((?:\s*-\s.*\n|\s*#.*\n)*)/;
+// Companies marked `any_india_city: true` in portals.yml (the startup list you gave on 7 Nov): most hire in
+// Bengaluru, Noida or Pune, so a second scan takes just them, with any Indian city allowed.
+const INDIA_CITIES = ['India', 'Bengaluru', 'Bangalore', 'Noida', 'Gurugram', 'Gurgaon', 'Delhi', 'Mumbai', 'Pune', 'Chennai', 'Jaipur', 'Kolkata', 'Ahmedabad'];
+const WIDE_TITLES = ['Forensic', 'Vigilance', 'Security Consultant', 'Security Engineer', 'Threat', 'SDE I', 'SDE 1', 'Software Development Engineer', 'Customer Experience Engineer', 'Quality Analyst', 'Data Scientist'];
+const WIDE_DAYS = 120;
+function widePortals(text) {
+  const t = text.indexOf('\ntracked_companies:'), b = text.indexOf('\njob_boards:');
+  if (t < 0) return null;
+  const section = text.slice(t, b > t ? b : text.length);
+  const blocks = section.split(/\n(?=  - name: )/);
+  const keep = blocks.slice(1).filter(x => /^\s+any_india_city:\s*true/m.test(x));
+  if (!keep.length) return null;
+  let out = text.slice(0, t) + [blocks[0], ...keep].join('\n') + '\njob_boards: []\n';
+  out = out.replace(ALLOW, (m, a, l) => `${a}${l}${INDIA_CITIES.map(c => `    - ${JSON.stringify(c)}\n`).join('')}`);
+  // Your interests in the titles these companies use, and older postings: the list was checked open on 1 Nov.
+  out = out.replace(POSITIVE, (m, a, l) => `${a}${l}${WIDE_TITLES.map(w => `    - ${JSON.stringify(w)}
+`).join('')}`);
+  out = out.replace(/^max_posting_age_days:.*$/m, `max_posting_age_days: ${WIDE_DAYS}`);
+  return { text: out, companies: new Set(keep.map(x => normCompany(x.match(/^  - name: (.+)$/m)[1].replace(/["']/g, '')))) };
+}
 const ALLOW = /(^location_filter:\s*\n(?:\s*#.*\n)*\s*allow:\s*\n(?:\s*#.*\n)*)((?:\s*-\s.*\n|\s*#.*\n)*)/m;
 const positiveList = text => [...(text.match(POSITIVE)?.[2] || '').matchAll(/^\s*-\s*["']?(?:word:)?(.+?)["']?\s*(?:#.*)?$/gm)].map(m => m[1].toLowerCase());
 // The scanner's own rule: a substring, except that a 2-3 letter keyword ("AI") must be a whole word.
@@ -249,6 +269,19 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       spawnSync(process.execPath, ['-e', 'setTimeout(()=>{}, 45000)']);
       [r, receipt] = scan();
     }
+    // The startup list: its own scan, any Indian city (see widePortals). Scan history keeps the first
+    // scan's location skips out of "seen", so these roles still count as new here.
+    const wide = widePortals(scanPortals);
+    if (wide) {
+      writeFileSync(portalsFile, wide.text);
+      const w = spawnSync(process.execPath, ['scan.mjs', '--json', '--quiet', '--since', String(WIDE_DAYS)], { cwd: opsDir, env, encoding: 'utf8', timeout: 20 * 60_000, maxBuffer: 64 << 20 });
+      writeFileSync(portalsFile, scanPortals);
+      let wr = null;
+      try { wr = JSON.parse(w.stdout.trim().split('\n').pop()); } catch { /* no receipt */ }
+      run.wideScanned = wr?.scanned ?? 0;
+      if (w.status !== 0 && w.status !== 2) run.errors.push(`wide scan exited ${w.status}`);
+    }
+    const wideCo = j => !!wide && wide.companies.has(normCompany(j.company));
     if (receipt) Object.assign(run, { scanned: receipt.scanned, errors: receipt.errors.map(e => `${e.company}: ${e.error}`.slice(0, 160)) });
     if (r.status !== 0 && r.status !== 2) run.errors.push(`scan.mjs exited ${r.status}`);
     const haveUrl = new Set(state.jobs.map(j => j.url));
@@ -261,7 +294,7 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       fresh.push({ url: h.url, company: h.company, title: h.title, location: h.location, posted: h.posted_at || '', found: today, portal: h.portal });
     }
     // A job only the friend's keywords caught doesn't belong on the owner's list, and the reverse.
-    for (const j of fresh) if (!haveUrl.has(j.url) && wantsTitle(j.title, ownerWords) && !onlyFriends(j.location)) { delta.jobs.push(j); haveUrl.add(j.url); }
+    for (const j of fresh) if (!haveUrl.has(j.url) && (wideCo(j) ? wantsTitle(j.title, [...ownerWords, ...WIDE_TITLES.map(w => w.toLowerCase())]) : wantsTitle(j.title, ownerWords) && !onlyFriends(j.location))) { delta.jobs.push(j); haveUrl.add(j.url); }
     run.found = delta.jobs.length;
     delta.lastPullAt = run.at;
     // Every posting of the last three weeks, not just this run's: a new or changed profile sees them all.
