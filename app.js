@@ -640,10 +640,12 @@
     if (picks.length) html += head('03.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
     // Fresh postings first, whatever their score: being early is the one thing that cannot be fixed later.
     const band = r => S.freshness(r).band;
-    const early = open.filter(r => !r.interested && band(r) === 'fresh'), older = open.filter(r => !r.interested && band(r) === 'old');
+    const early = open.filter(r => !r.interested && band(r) === 'fresh'), older = open.filter(r => !r.interested && band(r) === 'old' && !newCo(r));
+    // A company new to you stays in the main list even when its posting is weeks old (the startup list was checked open on 1 Nov).
+    const folded = r => band(r) === 'fresh' || (band(r) === 'old' && !newCo(r));
     if (early.length) html += head('03.1', 'Apply today', early.length, 'Posted in the last 48 hours. Apply while the pile is small.') + cards(early);
     GROUPS.forEach(([name, hint, test], g) => {
-      const rows = open.filter(r => !r.interested && !['fresh', 'old'].includes(band(r)) && test(r));
+      const rows = open.filter(r => !r.interested && !folded(r) && test(r));
       if (rows.length) html += head(`03.${g + 2}`, name, rows.length, hint) + cards(rows);
     });
     if (older.length) html += `<details class="fold"><summary>Older than 7 days (${older.length})</summary><p class="muted">Apply only if the fit is strong, ideally with a referral or a direct message.</p>${cards(older)}</details>`;
