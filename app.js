@@ -145,8 +145,8 @@
     return [...exact.map(e => `<span class="badge team" title="${esc(e.date)}">${e.status === 'applied' ? `Applied by ${name(e)}` : `${name(e)} shortlisted`}</span>`),
       ...[...new Set(rest.map(e => e.by))].map(by => { const e = rest.find(x => x.by === by); return `<span class="badge team" title="${esc(e.title)}: ask about a referral">${name(e)} ${e.status === 'applied' ? 'applied here' : 'is looking here'}</span>`; })].join('');
   }
-  let bestOnly = store.get(BEST_KEY) !== '0';
-  let loading = true, feedTotal = 0, applyTotal = 0, BASE = null; // BASE: the profile as it stood when Settings opened
+  const bestOnly = false; // 9 Nov: one list with every pulled job, each on its own card
+  let loading = true, feedTotal = 0, applyTotal = 0, applyNew = 0, BASE = null; // BASE: the profile as it stood when Settings opened
   // Best fit only: each company shows its top role; the rest wait in a dropdown under it.
   function bestPerCompany(rows, rank) {
     if (!bestOnly) return rows;
@@ -534,18 +534,15 @@
     const closed = FEED_JOBS.filter(j => j.gone && j.choice?.action !== 'reject');
     const idx = j => FEED_JOBS.indexOf(j);
     const cards = list => `<div class="grid">${list.map(j => feedCard(j, idx(j))).join('')}</div>`;
-    $('feed-count').textContent = open.length || '';
-    let html = head('02', 'New jobs', open.length, 'Fresh from your company boards. Reject what you don\'t want and say why: the list learns, and so does the daily run.');
-    html += learnedPanel();
-    if (liked.length) html += head('02.1', 'Interested', liked.length, 'The next daily run evaluates these first and builds a tailored CV.') + cards(liked);
-    html += open.length ? head('02.2', 'To review', open.length, 'Ranked by fit × hireability, read from each job description (from the title when the description could not be read). The best role at each company comes with a tailored one-page CV.') + bestToggle() + cards(open)
-      : `<p class="empty">${loading ? 'Loading your jobs…' : FEED.lastPullAt ? 'Nothing new to review. Pull again later, or wait for the next automatic pull.' : 'No pull yet. Press “Pull new jobs”.'}</p>`;
-    html += repeatFold(repeats, cards);
-    if (hidden.length) html += `<details class="fold"><summary>Hidden by what you taught me (${hidden.length})</summary>${cards(hidden)}</details>`;
-    if (rejected.length) html += `<details class="fold"><summary>Rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
-    if (closed.length) html += `<details class="fold"><summary>Closed postings (${closed.length})</summary>${cards(closed)}</details>`;
-    $('tab-feed').innerHTML = html;
+    void liked; void repeats; void open;
+    let html = '';
+    if (hidden.length) html += `<details class="fold"><summary>Hidden by your filters (${hidden.length})</summary><p class="muted">Pulled, but they ask for more years than you set, are senior, or match something you rejected. Each card says why.</p>${cards(hidden)}</details>`;
+    if (rejected.length) html += `<details class="fold"><summary>You rejected (${rejected.length})</summary>${cards(rejected)}</details>`;
+    if (closed.length) html += `<details class="fold"><summary>Closed pulled postings (${closed.length})</summary>${cards(closed)}</details>`;
+    html += `<details class="fold"><summary>What the list has learned from you</summary>${learnedPanel()}</details>`;
+    FEED_EXTRA = html;
   }
+  let FEED_EXTRA = '';
 
   const legacyAppliedKey = r => `jt-applied-${r.pdfId || r.url}`; // ticks from before "I applied" synced
   const GROUPS = [
@@ -627,31 +624,33 @@
     const fresh = r => !isApplied(r) && (r.interested || !appliedCo(r));
     const open = bestPerCompany(APPLY.filter(fresh), rankOf);
     const repeats = APPLY.filter(r => !isApplied(r) && !fresh(r));
-    applyTotal = APPLY.filter(fresh).length;
+    applyTotal = APPLY.filter(fresh).length + repeats.length; applyNew = APPLY.filter(fresh).length;
     const marked = APPLY.filter(isApplied);
-    $('apply-count').textContent = open.length || '';
-    if (!APPLY.length) { $('tab-apply').innerHTML = head('03', 'To apply', 0) + `<p class="empty">${loading ? 'Loading your jobs…' : 'Nothing to apply to yet. The next daily run adds roles with a tailored CV.'}</p>`; return; }
+    $('apply-count').textContent = open.length + repeats.length || '';
+    if (!APPLY.length) { $('tab-apply').innerHTML = head('02', 'To apply', 0) + `<p class="empty">${loading ? 'Loading your jobs…' : 'Nothing to apply to yet. The next pull adds roles with a tailored CV.'}</p>` + FEED_EXTRA; return; }
     const cards = list => `<div class="grid">${list.map(r => applyCard(r, APPLY.indexOf(r))).join('')}</div>`;
-    let html = head('03', 'To apply', open.length, 'Evaluated roles plus every pulled job that passes your filters. The best role at each company has a one-page CV tailored to it. Read the CV before you send it.');
+    let html = head('02', 'To apply', open.length + repeats.length, 'Every job the pulls found that passes your filters, newest companies first. The best role at each company has a one-page CV tailored to it; press Interested on any other to get one. Read the CV before you send it.');
     const lastCheck = FEED.lastCheckAt;
-    html += bestToggle() + `<div class="pull reveal"><button class="btn ghost small" type="button" data-check>Check for closed postings</button>
+    html += `<div class="pull reveal"><button class="btn ghost small" type="button" data-check>Check for closed postings</button>
       <p class="mono muted">${lastCheck ? `Last checked ${esc(ago(lastCheck))}.` : 'Not checked yet.'} Each pull also rechecks. Closed postings leave this list; found one yourself? Press “Posting closed” on its card.</p></div>`;
     const picks = open.filter(r => r.interested);
-    if (picks.length) html += head('03.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
+    if (picks.length) html += head('02.0', 'Your picks', picks.length, 'Jobs you marked Interested.') + cards(picks);
     // Fresh postings first, whatever their score: being early is the one thing that cannot be fixed later.
     const band = r => S.freshness(r).band;
     const early = open.filter(r => !r.interested && band(r) === 'fresh'), older = open.filter(r => !r.interested && band(r) === 'old' && !newCo(r));
     // A company new to you stays in the main list even when its posting is weeks old (the startup list was checked open on 1 Nov).
     const folded = r => band(r) === 'fresh' || (band(r) === 'old' && !newCo(r));
-    if (early.length) html += head('03.1', 'Apply today', early.length, 'Posted in the last 48 hours. Apply while the pile is small.') + cards(early);
+    if (early.length) html += head('02.1', 'Apply today', early.length, 'Posted in the last 48 hours. Apply while the pile is small.') + cards(early);
     GROUPS.forEach(([name, hint, test], g) => {
       const rows = open.filter(r => !r.interested && !folded(r) && test(r));
-      if (rows.length) html += head(`03.${g + 2}`, name, rows.length, hint) + cards(rows);
+      if (rows.length) html += head(`02.${g + 2}`, name, rows.length, hint) + cards(rows);
     });
-    if (older.length) html += `<details class="fold"><summary>Older than 7 days (${older.length})</summary><p class="muted">Apply only if the fit is strong, ideally with a referral or a direct message.</p>${cards(older)}</details>`;
-    html += repeatFold(repeats, cards);
+    if (older.length) html += head('02.6', 'Older than 7 days', older.length, 'Apply only if the fit is strong, ideally with a referral or a direct message.') + cards(older);
+    // 9 Nov: every pulled job on this page. Companies you applied to before come last, labelled, not folded away.
+    if (repeats.length) html += head('02.7', 'Companies you applied to before', repeats.length, 'Still open, but you already applied to each company. New companies are above.') + cards(repeats);
     if (marked.length) html += `<details class="fold"><summary>Applied (${marked.length})</summary><p class="muted">Each one starts the cooldown for its company. Your teammate sees them on the Team tab.</p>${cards(marked)}</details>`;
     if (closedRoles.length) html += `<details class="fold"><summary>Closed postings (${closedRoles.length})</summary><p class="muted">Removed because the posting is gone or no longer takes applications. If one is still open, press “It's still open”.</p><div class="grid">${closedRoles.map(closedCard).join('')}</div></details>`;
+    html += FEED_EXTRA;
     $('tab-apply').innerHTML = html;
   }
 
@@ -661,18 +660,18 @@
     const count = s => rows.filter(r => r.status === s).length;
     const waiting = rows.filter(r => r.status === 'Applied' && /waiting/i.test(r.notes)).length;
     const due = DATA.followups.entries.length;
-    const shownApply = Number($('apply-count').textContent) || 0, shownNew = Number($('feed-count').textContent) || 0;
-    const toApply = applyTotal, fresh = feedTotal;
+    const shownApply = Number($('apply-count').textContent) || 0;
+    const toApply = applyTotal;
     const sub = (shown, all, word) => (bestOnly && shown !== all ? `${shown} best fit` : word);
     const tiles = [
-      ['New jobs', loading ? '…' : fresh, loading ? 'loading' : sub(shownNew, fresh, 'to review')], ['To apply', loading ? '…' : toApply, loading ? 'loading' : sub(shownApply, toApply, 'to apply')], ['Applied', count('Applied'), `${waiting} waiting`],
+      ['To apply', loading ? '…' : toApply, loading ? 'loading' : `${applyNew} at new companies`], ['Applied', count('Applied'), `${waiting} waiting`],
       ['Interview', count('Interview') + count('Assessment'), 'active'], ['Offers', count('Offer') + count('Hired'), ''],
       ['Rejected', count('Rejected'), ''], ['Follow-ups', due, 'due now', due > 0],
     ];
     $('kpis').innerHTML = tiles.map(([l, n, sub, alert], i) =>
       `<div class="kpi${alert ? ' alert' : ''}"><div class="i">${pad(i + 1)} —</div><div class="n">${n}</div><div class="l">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ''}</div></div>`).join('');
     const best = toApply ? APPLY.filter(r => r.hire >= 3.5 && !isApplied(r) && !appliedCo(r)).length : 0;
-    $('hero-line').textContent = best ? `${best} best chance${best === 1 ? '' : 's'} waiting.` : fresh ? `${fresh} new job${fresh === 1 ? '' : 's'} to review.` : 'Apply where you can win.';
+    $('hero-line').textContent = best ? `${best} best chance${best === 1 ? '' : 's'} waiting.` : toApply ? `${toApply} job${toApply === 1 ? '' : 's'} to apply to.` : 'Apply where you can win.';
   }
   function tableHtml(t) {
     return `<div class="table-wrap"><table><thead><tr>${t.header.map(h => `<th>${md(h)}</th>`).join('')}</tr></thead>
@@ -715,7 +714,7 @@
   function renderFollowups() {
     const rank = e => (e.status === 'interview' || e.status === 'assessment' ? 0 : 1);
     const items = [...DATA.followups.entries].sort((a, b) => rank(a) - rank(b) || a.daysSinceApplication - b.daysSinceApplication);
-    let html = head('04', 'Follow-ups', items.length, 'Tick one once you have followed up today. Ticks reach your other devices.');
+    let html = head('03', 'Follow-ups', items.length, 'Tick one once you have followed up today. Ticks reach your other devices.');
     if (!items.length) { $('tab-followups').innerHTML = html + '<p class="empty">Nothing due.</p>'; return; }
     html += `<div class="grid">${items.map(e => {
       const done = choiceFor(`followup:${e.num}`)?.date === today();
@@ -743,11 +742,11 @@
   }
   function renderEvals() {
     const list = [...DATA.reports].reverse();
-    $('tab-evals').innerHTML = head('06', 'Evaluations', list.length) + (list.length ? `<div class="grid">${list.map(evalCard).join('')}</div>` : '<p class="empty">No evaluations yet.</p>');
+    $('tab-evals').innerHTML = head('05', 'Evaluations', list.length) + (list.length ? `<div class="grid">${list.map(evalCard).join('')}</div>` : '<p class="empty">No evaluations yet.</p>');
   }
   function renderHistory() {
-    if (!DATA.dailies.length) { $('tab-history').innerHTML = head('07', 'History', 0) + '<p class="empty">No daily runs yet.</p>'; return; }
-    $('tab-history').innerHTML = head('07', 'History', DATA.dailies.length) + `<div class="chips" id="runs">${DATA.dailies.map((d, i) =>
+    if (!DATA.dailies.length) { $('tab-history').innerHTML = head('06', 'History', 0) + '<p class="empty">No daily runs yet.</p>'; return; }
+    $('tab-history').innerHTML = head('06', 'History', DATA.dailies.length) + `<div class="chips" id="runs">${DATA.dailies.map((d, i) =>
       `<button type="button" data-run="${i}" aria-pressed="${i === 0}">${esc(d.date)}</button>`).join('')}</div><div id="run-body">${dailyHtml(DATA.dailies[0], '07.1')}</div>`;
   }
   // Both people, one company per card, so a referral is easy to spot.
@@ -762,7 +761,7 @@
     for (const e of rows) { if (!groups.has(e.companyKey)) groups.set(e.companyKey, []); groups.get(e.companyKey).push(e); }
     const list = [...groups.values()].map(g => g.sort((a, b) => (b.date || '').localeCompare(a.date || ''))).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || ''));
     const who = e => esc(TEAM.names[e.by] || 'Teammate');
-    let html = head('08', 'Team', list.length, 'Who shortlisted and applied where. Both of you at one company? Talk first, and ask about a referral.');
+    let html = head('07', 'Team', list.length, 'Who shortlisted and applied where. Both of you at one company? Talk first, and ask about a referral.');
     html += `<div class="chips">${[['all', 'Both of us'], ...Object.entries(TEAM.names)].map(([id, label]) => `<button type="button" data-team-view="${esc(id)}" aria-pressed="${teamView === id}">${esc(label)}</button>`).join('')}</div>`;
     html += list.length ? `<div class="grid">${list.map(g => {
       const both = new Set(g.map(e => e.by)).size > 1;
@@ -1138,6 +1137,7 @@
   function restoreView() {
     let v = null;
     try { v = JSON.parse(store.get(viewKey()) || 'null'); } catch { return; }
+    if (v?.tab === 'feed') v.tab = 'apply';
     const btn = v?.tab && document.querySelector(`.tabs [data-tab="${v.tab}"]`);
     if (!btn || btn.hidden) return;
     selectTab(v.tab, true);
@@ -1200,6 +1200,7 @@
     dispatch('pull').catch(err => setPull(esc(err.message)));
   });
   function selectTab(tab, restoring) {
+    if (tab === 'feed') tab = 'apply';
     if (!restoring) saveView({ tab, y: 0 });
     document.querySelectorAll('.tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     document.querySelectorAll('.panel').forEach(p => { p.hidden = p.id !== `tab-${tab}`; });
@@ -1211,7 +1212,6 @@
     if (tab) { e.preventDefault(); selectTab(tab.dataset.tab); return; }
     const s = e.target.closest('[data-status]');
     if (s) { statusFilter = s.dataset.status; renderTracker(); return; }
-    if (e.target.closest('[data-best-only]')) { bestOnly = !bestOnly; store.set(BEST_KEY, bestOnly ? '1' : '0'); renderFeed(); renderToApply(); renderKpis(); return; }
     const tv = e.target.closest('[data-team-view]');
     if (tv) { teamView = tv.dataset.teamView; renderTeam(); return; }
     const reach = e.target.closest('[data-outreach]');

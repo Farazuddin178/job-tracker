@@ -46,13 +46,13 @@
       </a>
       <nav class="tabs" role="tablist" aria-label="Sections">
         <button role="tab" data-tab="today" aria-selected="true"><i>01</i>Today</button>
-        <button role="tab" data-tab="feed"><i>02</i>New jobs <span class="count" id="feed-count"></span></button>
-        <button role="tab" data-tab="apply"><i>03</i>To apply <span class="count" id="apply-count"></span></button>
-        <button role="tab" data-tab="followups"><i>04</i>Follow-ups</button>
-        <button role="tab" data-tab="tracker"><i>05</i>Tracker</button>
-        <button role="tab" data-tab="evals"><i>06</i>Evaluations</button>
-        <button role="tab" data-tab="history"><i>07</i>History</button>
-        <button role="tab" data-tab="team" hidden><i>08</i>Team</button>
+        <button role="tab" data-tab="apply"><i>02</i>To apply <span class="count" id="apply-count"></span></button>
+        <button role="tab" data-tab="followups"><i>03</i>Follow-ups</button>
+        <button role="tab" data-tab="tracker"><i>04</i>Tracker</button>
+        <button role="tab" data-tab="evals"><i>05</i>Evaluations</button>
+        <button role="tab" data-tab="history"><i>06</i>History</button>
+        <button role="tab" data-tab="team" hidden><i>07</i>Team</button>
+        <span id="feed-count" hidden></span>
       </nav>
       <div class="bar-end">
         <button id="settings-btn" class="btn ghost small" type="button">Settings</button>
@@ -82,7 +82,6 @@
     <section class="kpis" id="kpis" aria-label="Summary"></section>
 
     <section id="tab-today" class="panel"></section>
-    <section id="tab-feed" class="panel" hidden></section>
     <section id="tab-apply" class="panel" hidden></section>
     <section id="tab-followups" class="panel" hidden></section>
     <section id="tab-tracker" class="panel" hidden>
