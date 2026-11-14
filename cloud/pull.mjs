@@ -32,7 +32,7 @@ const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, group
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
 const mode = (process.env.MODE || 'pull').trim();
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10); // IST
-const CV_VERSION = 2; // raise when the master CV changes: recent jobs you have not applied to get a fresh CV
+const CV_VERSION = 3; // 15 Nov 2026: new cv.md + kit (Twilio, client sites, XYZ bullets). Raise when the master CV changes: recent jobs you have not applied to get a fresh CV
 const KEEP_DAYS = 45, MAX_JOBS = 400, MAX_CVS = Number(process.env.MAX_CVS || 30), MAX_JDS = 80;
 const feedFile = join(here, 'feed.enc.js');
 
