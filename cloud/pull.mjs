@@ -32,7 +32,7 @@ const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, group
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
 const mode = (process.env.MODE || 'pull').trim();
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10); // IST
-const CV_VERSION = 3; // 15 Nov 2026: new cv.md + kit (Twilio, client sites, XYZ bullets). Raise when the master CV changes: recent jobs you have not applied to get a fresh CV
+const CV_VERSION = 4; // 15 Nov 2026: compact ATS template pack (data/templates/ats-compact) + trimmed dev-track variants; v3 was the new cv.md + kit. Raise when the master CV changes: recent jobs you have not applied to get a fresh CV
 const KEEP_DAYS = 45, MAX_JOBS = 400, MAX_CVS = Number(process.env.MAX_CVS || 30), MAX_JDS = 80;
 const feedFile = join(here, 'feed.enc.js');
 
@@ -258,7 +258,9 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
     // Hyderabad, remote in India, "India" alone, or no location stays.
     const OTHER_CITY = /bengal|bangalore|pune|noida|gurgaon|gurugram|delhi|mumbai|chennai|kolkata|ahmedabad|jaipur|kochi|coimbatore|indore|chandigarh|mysore|vizag|visakhapatnam/i;
     const FOREIGN = /\b(us|usa|u\.s\.|uk|united states|united kingdom|canada|ireland|spain|germany|france|netherlands|poland|europe|emea|latam|latin america|apac|singapore|australia|philippines|mexico|brazil|argentina)\b|, [a-z]{2}$/;
-    const outOfArea = loc => { const l = String(loc || '').toLowerCase(); if (!l || /hyderabad|secunderabad|telangana|gachibowli|hite?ch? city/.test(l)) return false; return OTHER_CITY.test(l) || (FOREIGN.test(l) && !/\bindia\b/.test(l)) || !(ownerPlaces.some(w => l.includes(w)) || /\bindia\b|\bind\b|^in\b/.test(l)); };
+    // Whole words only: "Remote - Indiana" must not pass as "remote - india" (it did, 15 Nov 2026).
+    const hasPlace = (l, w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(l);
+    const outOfArea = loc => { const l = String(loc || '').toLowerCase(); if (!l || /hyderabad|secunderabad|telangana|gachibowli|hite?ch? city/.test(l)) return false; return OTHER_CITY.test(l) || (FOREIGN.test(l) && !/\bindia\b/.test(l)) || !(ownerPlaces.some(w => hasPlace(l, w)) || /\bindia\b|\bind\b|^in\b/.test(l)); };
     // Jobs already in the feed from before: drop the out-of-area ones nobody acted on.
     const acted = new Set(state.feedback.map(f => f.url));
     delta.drop = state.jobs.filter(j => outOfArea(j.location) && !acted.has(j.url)).map(j => j.url);

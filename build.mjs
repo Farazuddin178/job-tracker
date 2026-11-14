@@ -8,7 +8,7 @@
 // repo can be public: without the passphrase the page shows only a password box.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, pbkdf2Sync, createCipheriv, createHash, createHmac } from 'node:crypto';
@@ -189,6 +189,17 @@ function cloudInput(pass, rows) {
     const p = join(root, rel);
     if (existsSync(p)) files[rel] = readFileSync(p, 'utf8');
   }
+  // The user's own CV templates (profile.yml `cv.template` can name one). A pack is a folder holding
+  // the template file and its sections/, so every text file under data/templates ships, two levels deep.
+  const tplDir = join(root, 'data', 'templates');
+  const walkTemplates = (dir, depth) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, d.name);
+      if (d.isDirectory()) { if (depth < 2) walkTemplates(p, depth + 1); continue; }
+      if (/\.(html|tex|yml|css)$/i.test(d.name)) files['data/templates/' + relative(tplDir, p).split(sep).join('/')] = readFileSync(p, 'utf8');
+    }
+  };
+  if (existsSync(tplDir)) walkTemplates(tplDir, 0);
   files['data/applications.md'] = readFileSync(resolveTrackerPath(root), 'utf8');
   const hist = join(root, 'data', 'scan-history.tsv');
   if (existsSync(hist)) {
