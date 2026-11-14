@@ -28,14 +28,16 @@
   const HARD = [
     [/\b(senior|sr\.?|lead|manager|principal|head|director|vp|avp|vice president|architect)\b/, 'senior title'],
     // Salesforce LMTS/PMTS/SMTS = lead/principal/senior member of technical staff; Wipro bands L4+ are experienced hires.
-    [/\b(lmts|pmts|smts)\b|\bl[4-9]\b/, 'senior level code'],
+    // 14 Nov: L3, III/IV, "Advisor" (Cigna's senior band), "Expert" and "Staff … Engineer" (Micron, Candescent) all
+    // rejected a 0-1 yr candidate within days. Blackbaud's "Staff A-1" is an entry band, so only Staff + engineer-type titles count.
+    [/\b(lmts|pmts|smts)\b|\bl[3-9]\b|\b(iii|iv)\b|\b(advisor|expert)\b|\bstaff\s+(?:\w+[- ]?){0,3}(engineer|scientist|developer|architect)\b/, 'senior level code'],
     [/\b(sales|business development|telecaller|tele ?sales|voice process|bpo|data entry|inside sales)\b/, 'sales / BPO / data entry'],
     [/\b(intern|internship|apprentice)\b/, 'internship'],
     [/\b(accountant|accounts payable|accounts receivable|reconciliation|treasury|fp&a|tax|payroll|credit analyst|loan|grants?)\b/, 'finance-ops'],
   ];
   const JUNIOR = [/\b(associate|junior|jr\.?|trainee|graduate|entry[- ]level|fresher|new grad)\b/, /\b(analyst|engineer|developer|specialist)\s+(i|1)\b/, /\b(l1|level 1|tier 1)\b/];
   const MID = [/\b(ii|2|l2|level 2)\b/];
-  const HIGH = [/\b(iii|iv|3|4|l3|level 3|expert|consultant|officer)\b/];
+  const HIGH = [/\b(3|4|level 3|consultant|officer)\b/];
   const STOP = new Set(['and', 'the', 'for', 'with', 'of', 'in', 'to', 'a', 'an', 'at', 'on', '-', '&', 'month', 'months', 'contract', 'india', 'hyderabad', 'remote', 'hybrid', 'team', 'role']);
 
   // Words in almost every target title: they re-rank but never hide a job on their own.
@@ -90,7 +92,7 @@
     let hire = 3;
     if (JUNIOR.some(re => re.test(title))) { hire += 1; why.push('junior / associate level'); }
     else if (HIGH.some(re => re.test(title))) { hire -= 1; why.push('level III+ / consultant: likely 3+ yrs'); }
-    else if (MID.some(re => re.test(title))) { hire -= 0.5; why.push('level II: often 2+ yrs'); }
+    else if (MID.some(re => re.test(title))) { hire -= 1; why.push('level II: usually 2+ yrs'); }
     if (P.home.test(loc)) hire += 0.25;
     else if (/remote/.test(loc) && /india|^remote$/.test(loc)) why.push('remote in India');
     let adj = 0, hiddenBy = null;
