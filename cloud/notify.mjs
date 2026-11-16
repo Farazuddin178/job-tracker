@@ -17,7 +17,7 @@ import { profilePass, parseProfiles } from './profiles.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active, groupByCompany, prefsFrom, freshness, appliedLog, appliedCompanies, normCompany } = globalThis.JobScore;
+const { learn, score, active, groupByCompany, prefsFrom, freshness, appliedLog, appliedCompanies, applicationKey, normCompany } = globalThis.JobScore;
 const SITE = 'https://farazuddin178.github.io/job-tracker/';
 const REPO = process.env.GITHUB_REPOSITORY || 'Farazuddin178/job-tracker';
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
@@ -33,7 +33,7 @@ const date = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
 const startedBy = (process.env.WHO || 'me').trim() || 'me';
 
 /** What one person's mail says, or null when this run gives them nothing worth a mail. */
-function digest({ id, delta, state, prefs, evaluated = [], applied = [], friend = false }) {
+function digest({ id, delta, state, prefs, evaluated = [], applied = [], closedKeys = [], friend = false }) {
   const run = delta.run || {};
   const fb = active(state.feedback);
   const learned = learn(fb);
@@ -41,7 +41,9 @@ function digest({ id, delta, state, prefs, evaluated = [], applied = [], friend 
   const scored = j => ({ ...j, s: score(j, learned, prefs) });
   const newUrls = new Set((delta.jobs || []).map(j => j.url));
   // Roles at a company you already applied to stay off the mail: you asked for new companies.
-  const ever = appliedCompanies([...applied, ...appliedLog(state.feedback)]);
+  // 16 Nov: only open applications hold a company; one the tracker closed (Rejected/Discarded) frees it.
+  const closed = new Set(closedKeys);
+  const ever = appliedCompanies([...applied, ...appliedLog(state.feedback).filter(a => !closed.has(applicationKey(a.company, a.title)))]);
   const repeat = j => { const l = ever[normCompany(j.company)]; return !!l && l.url !== j.url; };
   const seenBefore = new Set(state.jobs.filter(j => !newUrls.has(j.url)).map(j => normCompany(j.company)));
   const fresh = state.jobs.filter(j => newUrls.has(j.url) && !repeat(j)).map(scored).map(j => ({ ...j, newCo: !seenBefore.has(normCompany(j.company)) }));
@@ -138,7 +140,7 @@ const password = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
 // The owner.
 const ownerProfile = existsSync(join(here, 'profiles/me/profile.enc.json')) ? decryptJson(pass, JSON.parse(readFileSync(join(here, 'profiles/me/profile.enc.json'), 'utf8'))) : null;
 const ownerPrefs = prefsFrom({ ...(ownerProfile || {}), resumeText: input.files['cv.md'] || '' }, 'me');
-const mine = digest({ id: 'me', delta, state, prefs: ownerPrefs, evaluated: input.files['data/to-apply.json'] ? JSON.parse(input.files['data/to-apply.json']) : [], applied: input.files['data/applied.json'] ? JSON.parse(input.files['data/applied.json']) : [] });
+const mine = digest({ id: 'me', delta, state, prefs: ownerPrefs, evaluated: input.files['data/to-apply.json'] ? JSON.parse(input.files['data/to-apply.json']) : [], applied: input.files['data/applied.json'] ? JSON.parse(input.files['data/applied.json']) : [], closedKeys: input.files['data/closed-applications.json'] ? JSON.parse(input.files['data/closed-applications.json']) : [] });
 if (!mine) console.log('Nothing new: no notification.');
 else {
   let sent = false;

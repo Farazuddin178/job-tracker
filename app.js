@@ -107,7 +107,9 @@
   function recompute() {
     ACTIVE = S.active(allFeedback()); LEARNED = S.learn(ACTIVE);
     PREFS = S.prefsFrom(PROFILE, ID);
-    const applied = [...S.appliedFromTracker(DATA?.tracker), ...S.appliedLog(allFeedback())];
+    // 16 Nov: only OPEN applications hold a company. Once the tracker marks every application there
+    // Rejected (or Discarded), its roles come back into the lists.
+    const applied = S.openApplications(DATA?.tracker, S.appliedLog(allFeedback()));
     LOCKS = S.companyLocks(applied, Number(PROFILE?.cooldownDays) || 60);
     EVER = S.appliedCompanies(applied);
     FIRST = S.firstSeen(FEED.jobs);
@@ -130,7 +132,7 @@
   // A company whose first job reached you in the last 3 days.
   const newCo = r => { const f = FIRST[S.normCompany(r.company)]; return !!f && f >= new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10) && !appliedCo(r); };
   const newBadge = r => (newCo(r) ? '<span class="badge hire" title="First seen in the last 3 days, and you have not applied there">New company</span>' : '');
-  const repeatFold = (list, cards) => (list.length ? `<details class="fold"><summary>At companies you already applied to (${list.length})</summary><p class="muted">Kept out of your lists so each pull brings new companies. Open one only if you really want a second role there.</p>${cards(list)}</details>` : '');
+  const repeatFold = (list, cards) => (list.length ? `<details class="fold"><summary>Waiting on an application you already sent (${list.length})</summary><p class="muted">You applied to each of these companies and they have not answered yet. A second application there looks unfocused, so these stay hidden until the tracker marks that application Rejected or Discarded. Then the company's best role comes back above.</p>${cards(list)}</details>` : '');
   function cooldownNote(r) {
     const l = lockFor(r);
     return l ? `<p class="cool" role="note">Already applied to ${esc(l.title)} at ${esc(r.company)} on ${esc(l.date)}. Cooldown until ${esc(l.until)}${ID === 'me' ? '; any CV here keeps the version you sent them' : ''}.</p>` : '';
@@ -145,7 +147,7 @@
     return [...exact.map(e => `<span class="badge team" title="${esc(e.date)}">${e.status === 'applied' ? `Applied by ${name(e)}` : `${name(e)} shortlisted`}</span>`),
       ...[...new Set(rest.map(e => e.by))].map(by => { const e = rest.find(x => x.by === by); return `<span class="badge team" title="${esc(e.title)}: ask about a referral">${name(e)} ${e.status === 'applied' ? 'applied here' : 'is looking here'}</span>`; })].join('');
   }
-  const bestOnly = false; // 9 Nov: one list with every pulled job, each on its own card
+  const bestOnly = true; // 16 Nov: one card per company: the most hireable role, then the best paid; the rest fold under it
   let loading = true, feedTotal = 0, applyTotal = 0, applyNew = 0, BASE = null; // BASE: the profile as it stood when Settings opened
   // Best fit only: each company shows its top role; the rest wait in a dropdown under it.
   function bestPerCompany(rows, rank) {
@@ -155,8 +157,9 @@
   }
   function otherRoles(r, card) {
     if (!r.others?.length) return '';
+    const payNote = r.pay && r.pay !== 'not listed' ? `, pays ${esc(r.pay)}` : '';
     return `<details class="others"><summary>View ${r.others.length} other role${r.others.length === 1 ? '' : 's'} at this company</summary>
-      <p class="cool">Applying to several roles at one company with differently tailored resumes can look unfocused to recruiters and ATS systems. Pick one.</p>
+      <p class="cool">Recommended: this card is the easiest to get at ${esc(r.company)} (hireability ${esc(r.hire)}${payNote}); where two roles tie, the better paid one wins. Applying to several roles at one company with differently tailored resumes can look unfocused to recruiters and ATS systems. Pick one.</p>
       <div class="grid">${r.others.map(card).join('')}</div></details>`;
   }
   const bestToggle = () => `<div class="chips best-toggle"><button type="button" data-best-only aria-pressed="${bestOnly}">Best fit per company</button></div>`;
@@ -619,7 +622,8 @@
     const closedRoles = all.filter(r => isGone(r.url));
     APPLY = all.filter(r => !isGone(r.url))
       .sort((a, b) => (b.interested ? 1 : 0) - (a.interested ? 1 : 0) || newCo(b) - newCo(a) || S.freshness(a).order - S.freshness(b).order || b.hire - a.hire || b.fit - a.fit || (a.closes || '9').localeCompare(b.closes || '9'));
-    const rankOf = r => (r.interested ? 100 : 0) + Number(r.hire) * Number(r.fit) + (r.jd?.matched?.length || 0) / 100;
+    // Best role per company, in this order: your pick, the most hireable, then the better paid (listed pay in LPA), then fit.
+    const rankOf = r => (r.interested ? 1000 : 0) + Number(r.hire) * 100 + Math.min(Number(r.jd?.payLpa) || 0, 40) + Number(r.fit) + (r.jd?.matched?.length || 0) / 100;
     // Your own picks stay even at a company you applied to; everything else there folds away.
     const fresh = r => !isApplied(r) && (r.interested || !appliedCo(r));
     const open = bestPerCompany(APPLY.filter(fresh), rankOf);
@@ -646,8 +650,8 @@
       if (rows.length) html += head(`02.${g + 2}`, name, rows.length, hint) + cards(rows);
     });
     if (older.length) html += head('02.6', 'Older than 7 days', older.length, 'Apply only if the fit is strong, ideally with a referral or a direct message.') + cards(older);
-    // 9 Nov: every pulled job on this page. Companies you applied to before come last, labelled, not folded away.
-    if (repeats.length) html += head('02.7', 'Companies you applied to before', repeats.length, 'Still open, but you already applied to each company. New companies are above.') + cards(repeats);
+    // 16 Nov: a company with an open application shows no new role until that application is rejected or discarded.
+    html += repeatFold(repeats, cards);
     if (marked.length) html += `<details class="fold"><summary>Applied (${marked.length})</summary><p class="muted">Each one starts the cooldown for its company. Your teammate sees them on the Team tab.</p>${cards(marked)}</details>`;
     if (closedRoles.length) html += `<details class="fold"><summary>Closed postings (${closedRoles.length})</summary><p class="muted">Removed because the posting is gone or no longer takes applications. If one is still open, press “It's still open”.</p><div class="grid">${closedRoles.map(closedCard).join('')}</div></details>`;
     html += FEED_EXTRA;

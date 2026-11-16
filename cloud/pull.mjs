@@ -28,7 +28,7 @@ import { parseResume, tailor } from './resume.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedLog, companyLocks, appliedCompanies, firstSeen } = globalThis.JobScore;
+const { learn, score, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedLog, companyLocks, appliedCompanies, applicationKey, firstSeen } = globalThis.JobScore;
 const pass = passphraseFrom(process.env, join(here, '.passphrase'), readFileSync, existsSync);
 const mode = (process.env.MODE || 'pull').trim();
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10); // IST
@@ -206,6 +206,8 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
     me.prefs = prefsFrom({ ...(me.profile || {}), resumeText: input.files['cv.md'] || '' }, 'me');
     me.cooldownDays = me.profile?.cooldownDays || 60;
     me.extraApplied = input.files['data/applied.json'] ? JSON.parse(input.files['data/applied.json']) : [];
+    // Applications the tracker has closed (Rejected/Discarded): a site-marked one among them no longer holds its company.
+    me.closedKeys = new Set(input.files['data/closed-applications.json'] ? JSON.parse(input.files['data/closed-applications.json']) : []);
     const kit = input.files['data/cv-kit.json'] ? JSON.parse(input.files['data/cv-kit.json']) : null;
     me.pdfKey = input.pdfSalt ? pbkdf2Sync(pass, Buffer.from(input.pdfSalt, 'base64'), ITERATIONS, 32, 'sha256') : null;
     const work = join(root, 'cv-work');
@@ -373,9 +375,10 @@ if (opsDir && existsSync(join(opsDir, 'scan.mjs'))) {
       const rejected = new Set(fbNow.filter(f => f.action === 'reject').map(f => f.url));
       const liked = new Set(fbNow.filter(f => f.action === 'like').map(f => f.url));
       const closed = new Set([...fbNow.filter(f => f.action === 'closed').map(f => f.url), ...Object.entries(P.state.liveness || {}).filter(([, l]) => l.status === 'expired').map(([u]) => u), ...(P.delta.drop || [])]);
-      const locks = companyLocks([...P.extraApplied, ...appliedLog(feedback)], P.cooldownDays);
+      const siteApplied = appliedLog(feedback).filter(a => !(P.closedKeys || new Set()).has(applicationKey(a.company, a.title)));
+      const locks = companyLocks([...P.extraApplied, ...siteApplied], P.cooldownDays);
       const lockOf = job => locks[normCompany(job.company)];
-      const ever = appliedCompanies([...P.extraApplied, ...appliedLog(feedback)]);
+      const ever = appliedCompanies([...P.extraApplied, ...siteApplied]);
       const repeat = job => { const l = ever[normCompany(job.company)]; return !!l && l.url !== job.url && !liked.has(job.url); };
       const first = firstSeen([...P.state.jobs, ...P.delta.jobs]);
       const newFirst = (a, b) => (first[normCompany(b.company)] || '').localeCompare(first[normCompany(a.company)] || '');

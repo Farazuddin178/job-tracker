@@ -239,7 +239,20 @@
   // Applications, from wherever they are recorded: {company, title, date, variant?}.
   // A tracker row is an application from "Applied" on, whatever became of it afterwards.
   const APPLIED_STATES = ['Applied', 'Responded', 'Assessment', 'Interview', 'Offer', 'Hired', 'Rejected'];
-  const appliedFromTracker = rows => (rows || []).filter(r => APPLIED_STATES.includes(r.status)).map(r => ({ company: r.company, title: r.role, date: r.date, url: r.url }));
+  // 16 Nov: an application is OPEN until the company rejects it (or you close it: Discarded). A company
+  // with an open application shows no new roles; once every application there is closed, it is free again.
+  const OPEN_STATES = ['Applied', 'Responded', 'Assessment', 'Interview', 'Offer', 'Hired'];
+  const CLOSED_STATES = ['Rejected', 'Discarded'];
+  const appliedFromTracker = (rows, states = APPLIED_STATES) => (rows || []).filter(r => states.includes(r.status)).map(r => ({ company: r.company, title: r.role, date: r.date, url: r.url }));
+  const openFromTracker = rows => appliedFromTracker(rows, OPEN_STATES);
+  const applicationKey = (company, title) => `${normCompany(company)}|${lc(title)}`;
+  // Tracker rows the company has answered (or you closed): their keys, so a site-marked application matched to one counts as closed.
+  const closedApplicationKeys = rows => (rows || []).filter(r => CLOSED_STATES.includes(r.status)).map(r => applicationKey(r.company, r.role));
+  // Open applications from the tracker plus the ones marked on the site, minus those the tracker has since closed.
+  function openApplications(rows, siteLog, closedKeys = closedApplicationKeys(rows)) {
+    const closed = new Set(closedKeys);
+    return [...openFromTracker(rows), ...(siteLog || []).filter(a => !closed.has(applicationKey(a.company, a.title)))];
+  }
   // Marked on the site. Kept apart from active() so it never replaces "Interested" as the choice on a job.
   function appliedLog(list) {
     const undone = new Set((list || []).filter(f => f.action === 'undo').map(f => f.target));
@@ -304,5 +317,5 @@
     ['dup', 'Already applied / duplicate'], ['other', 'Other'],
   ];
 
-  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, appliedLog, companyLocks, appliedCompanies, firstSeen, freshness, odds, REASONS, ARCH };
+  root.JobScore = { learn, score, tokens, active, analyzeJd, prefsFrom, topTerms, normCompany, groupByCompany, appliedFromTracker, openFromTracker, closedApplicationKeys, openApplications, applicationKey, appliedLog, companyLocks, appliedCompanies, firstSeen, freshness, odds, REASONS, ARCH };
 })(typeof window !== 'undefined' ? window : globalThis);

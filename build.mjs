@@ -20,7 +20,7 @@ const opsDir = resolve(process.env.CAREER_OPS_DIR || join(here, '..', 'career-op
 const { getCareerOpsRoot, resolveTrackerPath } = await import(pathToFileURL(join(opsDir, 'path-resolver.mjs')).href);
 const { loadYaml } = await import(pathToFileURL(join(opsDir, 'lib/yaml-document.mjs')).href);
 await import(pathToFileURL(join(here, 'score.js')).href);
-const { appliedFromTracker } = globalThis.JobScore;
+const { openFromTracker, closedApplicationKeys } = globalThis.JobScore;
 const root = getCareerOpsRoot();
 const ITERATIONS = 310_000;
 
@@ -139,7 +139,8 @@ function appliedRoles(rows) {
   const file = join(root, 'data', 'to-apply.json');
   const list = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
   const variant = row => list.find(r => norm(r.company).split(' ')[0] === norm(row.company).split(' ')[0] && norm(r.title) === norm(row.title))?.variant;
-  return appliedFromTracker(rows).map(a => ({ ...a, variant: variant(a) }));
+  // 16 Nov: open applications only. A company whose applications are all Rejected/Discarded is free again.
+  return openFromTracker(rows).map(a => ({ ...a, variant: variant(a) }));
 }
 
 // Each CV PDF is encrypted to pdfs/{id}.js with a key from the same passphrase and a fixed
@@ -182,7 +183,8 @@ function encryptPdfs(roles, pass) {
 // Input for the cloud "Pull new jobs" job (cloud/pull.mjs): the scanner's config and what counts as
 // already seen, encrypted. Rewritten only when the content changes, so it doesn't churn git history.
 function cloudInput(pass, rows) {
-  const files = { 'data/applied.json': JSON.stringify(appliedRoles(rows)) };
+  // closed-applications: company|title keys the tracker has closed, so an application marked on the site stops holding its company.
+  const files = { 'data/applied.json': JSON.stringify(appliedRoles(rows)), 'data/closed-applications.json': JSON.stringify(closedApplicationKeys(rows)) };
   // Scanner config and seen lists, plus what the cloud CV builder needs: cv.md (the fact gate's
   // ground truth), the CV kit (variants built from cv.md) and the PDF salt (below).
   for (const rel of ['portals.yml', 'config/profile.yml', 'data/pipeline.md', 'data/blacklist.md', 'cv.md', 'article-digest.md', 'data/cv-kit.json', 'data/to-apply.json']) {
