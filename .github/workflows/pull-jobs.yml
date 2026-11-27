@@ -24,10 +24,12 @@ on:
         description: "yes = saving choices only, no CVs, so skip the browser install (leave empty)"
         required: false
         default: ""
-  schedule:
-    # Odd minutes: GitHub delays runs queued on the hour the most.
-    - cron: "17 0 * * *"
-    - cron: "17 12 * * *"
+  # PAUSED 27 Nov 2026 at the user's request: no automatic pulls until they say "start".
+  # To resume, uncomment the four lines below (the site's buttons keep working either way).
+  # schedule:
+  #   # Odd minutes: GitHub delays runs queued on the hour the most.
+  #   - cron: "17 0 * * *"
+  #   - cron: "17 12 * * *"
 
 permissions:
   contents: write
